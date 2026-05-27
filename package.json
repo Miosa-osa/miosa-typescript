@@ -1,0 +1,63 @@
+{
+  "name": "@miosa/sdk",
+  "version": "1.2.0",
+  "description": "TypeScript SDK for the MIOSA API — cloud VM desktop infrastructure for AI agents",
+  "license": "MIT",
+  "author": "MIOSA <hello@miosa.ai>",
+  "homepage": "https://miosa.ai",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/miosa-ai/sdk-typescript"
+  },
+  "keywords": [
+    "miosa",
+    "ai-agents",
+    "computer-use",
+    "desktop-automation",
+    "cloud-vm",
+    "sdk"
+  ],
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "files": [
+    "dist",
+    "src",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "lint": "eslint src --ext .ts",
+    "clean": "rm -rf dist"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/ws": "^8.18.1",
+    "@typescript-eslint/eslint-plugin": "^7.0.0",
+    "@typescript-eslint/parser": "^7.0.0",
+    "@vitest/coverage-v8": "^1.0.0",
+    "eslint": "^8.0.0",
+    "tsup": "^8.0.0",
+    "typescript": "^5.4.0",
+    "vitest": "^1.0.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "optionalDependencies": {
+    "ws": "^8.20.0",
+    "undici": "^6.0.0 || ^7.0.0"
+  }
+}
