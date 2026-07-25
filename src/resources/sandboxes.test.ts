@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { MiosaError } from "../errors.js";
+import { MiosaError, NotFoundError } from "../errors.js";
 import { HttpClient } from "../http.js";
 import { Sandbox, Sandboxes } from "./sandboxes.js";
 
@@ -27,8 +27,20 @@ function sandboxData(overrides: Record<string, unknown> = {}) {
     state: "running",
     ready: true,
     template_id: "miosa-sandbox",
-    cpu_count: 1,
-    memory_mb: 1024,
+    size: "small",
+    resource_contract: {
+      id: "sandbox/small@v1",
+      version: "v1",
+      product: "sandbox",
+      size: "small",
+      vcpus: 2,
+      memory_mb: 4096,
+      disk_size_mb: 10240,
+    },
+    image_id: "miosa-sandbox-prod-1",
+    cpu_count: 2,
+    memory_mb: 4096,
+    disk_size_mb: 10240,
     timeout_sec: 300,
     metadata: {},
     created_at: "2026-05-13T00:00:00Z",
@@ -45,27 +57,36 @@ beforeEach(() => {
 
 describe("Sandboxes", () => {
   it("create() calls native /sandboxes with template_id", async () => {
-    mockRequest.mockResolvedValue({ data: sandboxData() });
+    mockRequest.mockResolvedValue({
+      data: sandboxData({
+        external_workspace_id: "workspace_1",
+        external_user_id: "user_1",
+        external_project_id: "project_1",
+      }),
+    });
 
     const client = new Sandboxes(makeHttp());
     const sandbox = await client.create({
       templateId: "nextjs",
-      cpuCount: 2,
-      memoryMb: 2048,
       idempotencyKey: "idem-1",
+      workspaceId: "f47ac10b-58cc-4372-a567-0e02b2c3d479",
     });
 
     expect(mockRequest).toHaveBeenCalledWith("/sandboxes", {
       method: "POST",
       body: {
         template_id: "nextjs",
-        cpu_count: 2,
-        memory_mb: 2048,
+        workspace_id: "f47ac10b-58cc-4372-a567-0e02b2c3d479",
       },
       headers: { "Idempotency-Key": "idem-1" },
     });
     expect(sandbox).toBeInstanceOf(Sandbox);
     expect(sandbox.id).toBe("sbx_123");
+    expect(sandbox.data).toMatchObject({
+      external_workspace_id: "workspace_1",
+      external_user_id: "user_1",
+      external_project_id: "project_1",
+    });
   });
 
   it("create() defaults to miosa-sandbox", async () => {
@@ -76,6 +97,83 @@ describe("Sandboxes", () => {
     expect(mockRequest).toHaveBeenCalledWith("/sandboxes", {
       method: "POST",
       body: { template_id: "miosa-sandbox" },
+    });
+  });
+
+  it("create() sends canonical workspace and project ownership", async () => {
+    mockRequest.mockResolvedValue(sandboxData());
+
+    await new Sandboxes(makeHttp()).create({
+      workspaceSlug: "clinic-iq",
+      workspaceName: "Clinic IQ",
+      projectSlug: "agent-runtime",
+      projectName: "Agent Runtime",
+    });
+
+    expect(mockRequest).toHaveBeenCalledWith("/sandboxes", {
+      method: "POST",
+      body: {
+        template_id: "miosa-sandbox",
+        workspace_slug: "clinic-iq",
+        workspace_name: "Clinic IQ",
+        project_slug: "agent-runtime",
+        project_name: "Agent Runtime",
+      },
+    });
+  });
+
+  it("create() resolves exact resources to their named contract", async () => {
+    mockRequest.mockResolvedValue(sandboxData());
+
+    await new Sandboxes(makeHttp()).create({
+      cpuCount: 4,
+      memoryMb: 8192,
+      diskSizeMb: 20480,
+    });
+
+    expect(mockRequest).toHaveBeenCalledWith("/sandboxes", {
+      method: "POST",
+      body: {
+        template_id: "miosa-sandbox",
+        size: "medium",
+        cpu_count: 4,
+        memory_mb: 8192,
+        disk_size_mb: 20480,
+      },
+    });
+  });
+
+  it("create() rejects incomplete or unsupported exact resources", async () => {
+    const sandboxes = new Sandboxes(makeHttp());
+
+    await expect(
+      sandboxes.create({ cpuCount: 2, memoryMb: 4096 }),
+    ).rejects.toThrow("require cpuCount, memoryMb, and diskSizeMb together");
+    await expect(
+      sandboxes.create({
+        cpuCount: 3,
+        memoryMb: 4096,
+        diskSizeMb: 10240,
+      }),
+    ).rejects.toThrow("must exactly match a named size contract");
+    expect(mockRequest).not.toHaveBeenCalled();
+  });
+
+  it("create() maps agent runtime profile controls", async () => {
+    mockRequest.mockResolvedValue(sandboxData());
+
+    await new Sandboxes(makeHttp()).create({
+      agentRuntimeProfileId: "profile_123",
+      skipRuntimeProfile: false,
+    });
+
+    expect(mockRequest).toHaveBeenCalledWith("/sandboxes", {
+      method: "POST",
+      body: {
+        template_id: "miosa-sandbox",
+        agent_runtime_profile_id: "profile_123",
+        skip_agent_runtime_profile: false,
+      },
     });
   });
 
@@ -103,6 +201,246 @@ describe("Sandboxes", () => {
 
     expect(mockGet).toHaveBeenNthCalledWith(1, "/sandboxes/sbx_123");
     expect(mockGet).toHaveBeenNthCalledWith(2, "/sandboxes/sbx_123");
+  });
+
+  it("fork() sends only canonical public fields", async () => {
+    mockRequest.mockResolvedValue({ data: sandboxData({ id: "sbx_fork" }) });
+    const sandbox = new Sandbox(makeHttp(), sandboxData());
+
+    await sandbox.fork({
+      timeoutSec: 1200,
+      templateId: "node-22",
+      idempotencyKey: "fork-idem-1",
+    });
+
+    expect(mockRequest).toHaveBeenCalledWith("/sandboxes/sbx_123/fork", {
+      method: "POST",
+      body: { timeout_sec: 1200, template_id: "node-22" },
+      headers: { "Idempotency-Key": "fork-idem-1" },
+    });
+  });
+
+  it("fork() preserves the deprecated name and metadata compatibility shape", async () => {
+    mockRequest.mockResolvedValue({ data: sandboxData({ id: "sbx_fork" }) });
+    const sandbox = new Sandbox(makeHttp(), sandboxData());
+
+    await sandbox.fork({
+      name: "legacy-fork",
+      metadata: { source: "legacy" },
+    });
+
+    expect(mockRequest).toHaveBeenCalledWith("/sandboxes/sbx_123/fork", {
+      method: "POST",
+      body: {
+        name: "legacy-fork",
+        metadata: { source: "legacy" },
+      },
+    });
+  });
+
+  it("getByName() URL-encodes the stable sandbox name", async () => {
+    mockGet.mockResolvedValue({ data: sandboxData({ id: "sbx_named" }) });
+
+    const sandbox = await new Sandboxes(makeHttp()).getByName(
+      "customer builder",
+    );
+
+    expect(mockGet).toHaveBeenCalledWith(
+      "/sandboxes/by-name/customer%20builder",
+    );
+    expect(sandbox.id).toBe("sbx_named");
+  });
+
+  it("getOrCreate() resumes an existing paused sandbox by name", async () => {
+    mockGet.mockResolvedValueOnce({
+      data: sandboxData({ state: "paused", name: "agent-builder" }),
+    });
+    mockPost.mockResolvedValueOnce({
+      data: sandboxData({ state: "running", name: "agent-builder" }),
+    });
+
+    const sandbox = await new Sandboxes(makeHttp()).getOrCreate({
+      name: "agent-builder",
+    });
+
+    expect(mockGet).toHaveBeenCalledWith("/sandboxes/by-name/agent-builder");
+    expect(mockPost).toHaveBeenCalledWith("/sandboxes/sbx_123/resume", {});
+    expect(sandbox.state).toBe("running");
+  });
+
+  it("createAgentWorkspace() creates a missing named sandbox with persistent agent defaults", async () => {
+    mockGet.mockRejectedValueOnce(new NotFoundError("missing"));
+    mockRequest.mockResolvedValueOnce({
+      data: sandboxData({ name: "agent-builder" }),
+    });
+
+    const sandbox = await new Sandboxes(makeHttp()).createAgentWorkspace({
+      name: "agent-builder",
+      externalWorkspaceId: "clinic-123",
+      externalUserId: "dr-smith",
+      waitUntilReady: false,
+    });
+
+    expect(mockRequest).toHaveBeenCalledWith("/sandboxes", {
+      method: "POST",
+      body: {
+        template_id: "miosa-sandbox",
+        persistent: true,
+        timeout_sec: 86_400,
+        idle_timeout_sec: 1800,
+        metadata: {
+          miosa_workspace_kind: "agent_workspace",
+          miosa_persistent: true,
+          snapshot_expiration_sec: 2_592_000,
+          keep_last_snapshots: 1,
+        },
+        name: "agent-builder",
+        external_workspace_id: "clinic-123",
+        external_user_id: "dr-smith",
+      },
+    });
+    expect(sandbox.id).toBe("sbx_123");
+  });
+
+  it("create() maps explicit persistence policy into lifecycle defaults and metadata", async () => {
+    mockRequest.mockResolvedValueOnce({
+      data: sandboxData({ name: "persistent-builder" }),
+    });
+
+    await new Sandboxes(makeHttp()).create({
+      name: "persistent-builder",
+      persistent: true,
+      snapshotExpirationDays: 14,
+      keepLastSnapshots: { count: 2, expirationSec: 60 * 60 * 24 * 30 },
+    });
+
+    expect(mockRequest).toHaveBeenCalledWith("/sandboxes", {
+      method: "POST",
+      body: {
+        template_id: "miosa-sandbox",
+        persistent: true,
+        timeout_sec: 86_400,
+        idle_timeout_sec: 1_800,
+        metadata: {
+          miosa_persistent: true,
+          snapshot_expiration_sec: 1_209_600,
+          keep_last_snapshots: { count: 2, expirationSec: 2_592_000 },
+        },
+        name: "persistent-builder",
+      },
+    });
+  });
+
+  it("extend() calls the sandbox timeout endpoint", async () => {
+    mockPost.mockResolvedValueOnce({
+      data: sandboxData({ timeout_sec: 86_400 }),
+    });
+
+    const sandbox = new Sandbox(makeHttp(), sandboxData());
+    await sandbox.extend(86_400);
+
+    expect(mockPost).toHaveBeenCalledWith("/sandboxes/sbx_123/extend", {
+      timeout_sec: 86_400,
+    });
+    expect(sandbox.data.timeout_sec).toBe(86_400);
+  });
+
+  it("run() dispatches a default Claude Code Run into the sandbox", async () => {
+    mockPost.mockResolvedValueOnce({
+      data: {
+        id: "run_1",
+        target_kind: "sandbox",
+        target_id: "sbx_123",
+        runner: "claude-code",
+        instruction: "create a hello world server",
+        status: "succeeded",
+      },
+    });
+
+    const sandbox = new Sandbox(makeHttp(), sandboxData());
+    const run = await sandbox.run("create a hello world server");
+
+    expect(mockPost).toHaveBeenCalledWith("/runs", {
+      instruction: "create a hello world server",
+      target_kind: "sandbox",
+      target_id: "sbx_123",
+      runtime_id: "sbx_123",
+      sandbox_id: "sbx_123",
+      runner: "claude-code",
+      cwd: "/workspace",
+      wait: true,
+    });
+    expect(run.runner).toBe("claude-code");
+  });
+
+  it("run() can dispatch Codex with env and wait disabled", async () => {
+    mockPost.mockResolvedValueOnce({
+      data: {
+        id: "run_2",
+        target_kind: "sandbox",
+        target_id: "sbx_123",
+        runner: "codex",
+        instruction: "edit files",
+        status: "running",
+      },
+    });
+
+    const sandbox = new Sandbox(makeHttp(), sandboxData());
+    await sandbox.run("edit files", {
+      runner: "codex",
+      env: { CODEX_API_KEY: "redacted" },
+      cwd: "/workspace/repo",
+      wait: false,
+    });
+
+    expect(mockPost).toHaveBeenCalledWith("/runs", {
+      instruction: "edit files",
+      target_kind: "sandbox",
+      target_id: "sbx_123",
+      runtime_id: "sbx_123",
+      sandbox_id: "sbx_123",
+      runner: "codex",
+      cwd: "/workspace/repo",
+      wait: false,
+      env: { CODEX_API_KEY: "redacted" },
+    });
+  });
+
+  it("prompt() passes advanced Claude and Codex runtime options", async () => {
+    mockPost.mockResolvedValueOnce({
+      data: {
+        id: "run_3",
+        target_kind: "sandbox",
+        target_id: "sbx_123",
+        provider: "claude",
+        prompt: "continue",
+        status: "running",
+      },
+    });
+
+    const sandbox = new Sandbox(makeHttp(), sandboxData());
+    await sandbox.prompt("continue", {
+      outputFormat: "stream-json",
+      resumeSessionId: "sess_123",
+      json: true,
+      outputSchema: "/workspace/schema.json",
+      image: "/workspace/mockup.png",
+    });
+
+    expect(mockPost).toHaveBeenCalledWith("/agent-runs", {
+      prompt: "continue",
+      target_kind: "sandbox",
+      target_id: "sbx_123",
+      sandbox_id: "sbx_123",
+      provider: "claude",
+      cwd: "/workspace",
+      wait: true,
+      output_format: "stream-json",
+      resume_session_id: "sess_123",
+      json: true,
+      output_schema: "/workspace/schema.json",
+      image: "/workspace/mockup.png",
+    });
   });
 
   it("delete() calls native /sandboxes/:id", async () => {
@@ -303,6 +641,57 @@ describe("Sandbox handle", () => {
     });
   });
 
+  it("createExport() creates a portable sandbox export descriptor", async () => {
+    mockPost.mockResolvedValue({
+      data: {
+        id: "exp_123",
+        sandbox_id: "sbx_123",
+        status: "ready",
+        files: [
+          {
+            path: "/workspace/dist/index.html",
+            filename: "index.html",
+            download_url: "https://api.miosa.test/download",
+          },
+        ],
+        archive_download_url: "https://api.miosa.test/archive",
+        created_at: "2026-06-14T00:00:00Z",
+      },
+    });
+
+    const sandbox = new Sandbox(makeHttp(), sandboxData());
+    const result = await sandbox.createExport({
+      paths: ["/workspace/dist/index.html"],
+      label: "build",
+    });
+
+    expect(mockPost).toHaveBeenCalledWith("/sandboxes/sbx_123/exports", {
+      paths: ["/workspace/dist/index.html"],
+      label: "build",
+    });
+    expect(result.sandboxId).toBe("sbx_123");
+    expect(result.archiveDownloadUrl).toBe("https://api.miosa.test/archive");
+    expect(result.files[0]?.downloadUrl).toBe(
+      "https://api.miosa.test/download",
+    );
+  });
+
+  it("downloadExport() downloads one file or archive as binary", async () => {
+    const bytes = new Uint8Array([1, 2, 3]);
+    mockGetBinary.mockResolvedValue(bytes);
+
+    const sandbox = new Sandbox(makeHttp(), sandboxData());
+    const result = await sandbox.downloadExport([
+      "/workspace/dist/index.html",
+      "/workspace/dist/app.js",
+    ]);
+
+    expect(result).toBe(bytes);
+    expect(mockGetBinary).toHaveBeenCalledWith(
+      "/sandboxes/sbx_123/exports/download?paths%5B%5D=%2Fworkspace%2Fdist%2Findex.html&paths%5B%5D=%2Fworkspace%2Fdist%2Fapp.js",
+    );
+  });
+
   it("files.list() and files.stat() use native sandbox file endpoints", async () => {
     mockGet.mockResolvedValue({ data: { path: "/workspace", entries: [] } });
     mockPost.mockResolvedValue({
@@ -325,7 +714,7 @@ describe("Sandbox handle", () => {
 
   it("preview.expose() returns native sandbox preview URL", async () => {
     mockPost.mockResolvedValue({
-      data: { url: "https://5173-sbx.sandbox.miosa.app" },
+      data: { url: "https://5173-sbx.sandbox.miosa.ai" },
     });
 
     const sandbox = new Sandbox(makeHttp(), sandboxData());
@@ -334,7 +723,43 @@ describe("Sandbox handle", () => {
     expect(mockPost).toHaveBeenCalledWith("/sandboxes/sbx_123/expose", {
       port: 5173,
     });
-    expect(url).toBe("https://5173-sbx.sandbox.miosa.app");
+    expect(url).toBe("https://5173-sbx.sandbox.miosa.ai");
+  });
+
+  it("preview.exposeInfo() returns the sandbox URL contract", async () => {
+    mockPost.mockResolvedValue({
+      data: {
+        url: "https://5173-sbx.sandbox.miosa.ai",
+        url_class: "temporary_preview",
+        stable_for_embedding: false,
+        recommended_next_action: "create_alias_or_publish",
+      },
+    });
+
+    const sandbox = new Sandbox(makeHttp(), sandboxData());
+    const info = await sandbox.preview.exposeInfo(5173);
+
+    expect(info).toMatchObject({
+      url: "https://5173-sbx.sandbox.miosa.ai",
+      url_class: "temporary_preview",
+      stable_for_embedding: false,
+      recommended_next_action: "create_alias_or_publish",
+    });
+  });
+
+  it("getHost() and getUrl() use the canonical preview resolver", async () => {
+    mockPost.mockResolvedValue({
+      data: { url: "https://5173-sbx.sandbox.miosa.ai" },
+    });
+
+    const sandbox = new Sandbox(makeHttp(), sandboxData());
+
+    await expect(sandbox.getHost(5173)).resolves.toBe(
+      "5173-sbx.sandbox.miosa.ai",
+    );
+    await expect(sandbox.getUrl(5173, "admin")).resolves.toBe(
+      "https://5173-sbx.sandbox.miosa.ai/admin",
+    );
   });
 
   it("logs get/stream use native sandbox log endpoints", async () => {
@@ -390,13 +815,35 @@ describe("Sandbox handle", () => {
     expect(restored.id).toBe("sbx_restored");
   });
 
+  it("metrics get uses native sandbox metrics endpoint", async () => {
+    mockGet.mockResolvedValue({
+      data: {
+        resource_type: "sandbox",
+        current: { cpu_count: 2, memory_mb: 4096 },
+      },
+    });
+
+    const sandbox = new Sandbox(makeHttp(), sandboxData());
+    const metrics = await sandbox.getMetrics("24h");
+    const resourceMetrics = await sandbox.metricsResource.get("24h");
+
+    expect(mockGet).toHaveBeenNthCalledWith(1, "/sandboxes/sbx_123/metrics", {
+      window: "24h",
+    });
+    expect(mockGet).toHaveBeenNthCalledWith(2, "/sandboxes/sbx_123/metrics", {
+      window: "24h",
+    });
+    expect(metrics.current).toEqual({ cpu_count: 2, memory_mb: 4096 });
+    expect(resourceMetrics.current).toEqual({ cpu_count: 2, memory_mb: 4096 });
+  });
+
   it("pause/resume/deploy use native sandbox lifecycle endpoints", async () => {
     mockPost
       .mockResolvedValueOnce({ data: sandboxData({ state: "paused" }) })
-      .mockResolvedValueOnce({ data: sandboxData({ state: "running" }) })
-      .mockResolvedValueOnce({
-        data: { deployment_id: "dep_1", url: "https://app.miosa.app" },
-      });
+      .mockResolvedValueOnce({ data: sandboxData({ state: "running" }) });
+    mockRequest.mockResolvedValueOnce({
+      data: { deployment_id: "dep_1", url: "https://app.miosa.app" },
+    });
 
     const sandbox = new Sandbox(makeHttp(), sandboxData());
     await sandbox.pause();
@@ -413,12 +860,41 @@ describe("Sandbox handle", () => {
       "/sandboxes/sbx_123/resume",
       {},
     );
-    expect(mockPost).toHaveBeenNthCalledWith(3, "/sandboxes/sbx_123/deploy", {
-      name: "site",
-      path: "/workspace/dist",
-      custom_domain: "example.com",
+    expect(mockRequest).toHaveBeenCalledWith("/sandboxes/sbx_123/deploy", {
+      method: "POST",
+      body: {
+        name: "site",
+        output_path: "/workspace/dist",
+        custom_domain: "example.com",
+      },
     });
     expect(deployment.deployment_id).toBe("dep_1");
+  });
+
+  it("deployDocker marks sandbox deployment for App Engine", async () => {
+    mockRequest.mockResolvedValueOnce({
+      data: {
+        deployment_id: "dep_2",
+        deployment_product: "docker_deploy",
+        data: { deployment: { docker_deploy_host_id: "ddh_123" } },
+      },
+    });
+
+    const sandbox = new Sandbox(makeHttp(), sandboxData());
+    const deployment = await sandbox.deployDocker({
+      name: "docker-site",
+      port: 3000,
+    });
+
+    expect(mockRequest).toHaveBeenCalledWith("/sandboxes/sbx_123/deploy", {
+      method: "POST",
+      body: {
+        name: "docker-site",
+        port: 3000,
+        deployment_type: "docker_deploy",
+      },
+    });
+    expect(deployment.deployment_product).toBe("docker_deploy");
   });
 
   it("throws before operations when not running", async () => {
@@ -428,6 +904,39 @@ describe("Sandbox handle", () => {
     );
 
     await expect(sandbox.exec("echo no")).rejects.toBeInstanceOf(MiosaError);
+    expect(mockPost).not.toHaveBeenCalled();
+  });
+
+  it("allows command and file operations on paused persistent sandboxes", async () => {
+    mockPost.mockResolvedValueOnce({
+      data: { stdout: "ok\n", stderr: "", exit_code: 0 },
+    });
+    mockGetBinary.mockResolvedValueOnce(new Uint8Array([1, 2, 3]));
+
+    const sandbox = new Sandbox(
+      makeHttp(),
+      sandboxData({ state: "paused", persistent: true }),
+    );
+
+    const result = await sandbox.exec("echo ok");
+    const bytes = await sandbox.download("/workspace/out.pdf");
+
+    expect(result.stdout).toBe("ok\n");
+    expect(bytes).toEqual(new Uint8Array([1, 2, 3]));
+    expect(mockPost).toHaveBeenCalledWith("/sandboxes/sbx_123/exec", {
+      command: "echo ok",
+    });
+    expect(mockGetBinary).toHaveBeenCalledWith(
+      "/sandboxes/sbx_123/files/workspace/out.pdf",
+    );
+  });
+
+  it("rejects command operations on paused non-persistent sandboxes", async () => {
+    const sandbox = new Sandbox(makeHttp(), sandboxData({ state: "paused" }));
+
+    await expect(sandbox.exec("echo ok")).rejects.toMatchObject({
+      code: "SANDBOX_NOT_RUNNING",
+    });
     expect(mockPost).not.toHaveBeenCalled();
   });
 
@@ -456,7 +965,7 @@ describe("Sandbox handle", () => {
           return { data: { stdout: "ok\n", stderr: "", exit_code: 0 } };
         }
         if (path.endsWith("/expose"))
-          return { data: { url: "https://sbx.sandbox.miosa.app" } };
+          return { data: { url: "https://sbx.sandbox.miosa.ai" } };
         if (path.endsWith("/artifacts")) return { data: { artifacts: {} } };
         if (path.endsWith("/files/stat"))
           return { data: { path: "/workspace/app.txt", size: 2 } };

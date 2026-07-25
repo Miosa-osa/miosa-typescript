@@ -6,7 +6,8 @@ export type TenantId = string & { readonly __brand: "TenantId" };
 
 // ─── Computers ───────────────────────────────────────────────────────────────
 
-export type ComputerSize = "small" | "medium" | "large";
+export type ComputerSize = "xs" | "small" | "medium" | "large" | "xl";
+export type ComputerSizeInput = ComputerSize | "xlarge";
 /**
  * Lifecycle states emitted by the control plane.
  *
@@ -63,9 +64,23 @@ export type ComputerVisibility = "public" | "tenant" | "key";
 export interface ComputerCreateParams {
   name: string;
   template_type?: ComputerTemplateType;
-  size?: ComputerSize;
+  /** Canonical sizes are xs/small/medium/large/xl. `xlarge` is accepted as a legacy input alias. */
+  size?: ComputerSizeInput;
   visibility?: ComputerVisibility;
   metadata?: Record<string, string>;
+  /**
+   * Explicit agent runtime profile to mount into this computer. When omitted,
+   * MIOSA applies the workspace/tenant default profile that targets computers.
+   */
+  agentRuntimeProfileId?: string;
+  agent_runtime_profile_id?: string;
+  /** Back-compat shorthand for agentRuntimeProfileId. */
+  agentProfileId?: string;
+  agent_profile_id?: string;
+  /** Opt out of the default agent runtime profile for this create call. */
+  skipRuntimeProfile?: boolean;
+  skipAgentRuntimeProfile?: boolean;
+  skip_agent_runtime_profile?: boolean;
 }
 
 export interface ComputerUpdateParams {
@@ -78,8 +93,9 @@ export interface ComputerData {
   id: ComputerId;
   name: string;
   /**
-   * URL-safe identifier used in preview URLs: `https://{port}-{slug}.sandbox.miosa.ai`.
-   * Falls back to the computer id when no slug is assigned.
+   * URL-safe identifier used in preview URLs: `https://{port}-{slug}.sandbox.{preview_domain}`.
+   * Falls back to the computer id when no slug is assigned. The domain is the
+   * tenant's white-label `preview_domain` (server-provided) — never hardcode it.
    */
   slug: string;
   status: ComputerStatus;
@@ -90,12 +106,27 @@ export interface ComputerData {
   metadata: Record<string, string>;
   /** Controls who can access the HTTP preview URL. Defaults to `"public"`. */
   visibility: ComputerVisibility;
-  /** Public ingress root, e.g. `https://<slug>.sandbox.miosa.ai`. */
+  /** Public ingress root, e.g. `https://<slug>.sandbox.<preview_domain>` (server-provided). */
   sandbox_url?: string;
+  /** Tenant's white-label preview/base domain (e.g. `cliniciq.com`). Use to build preview URLs. */
+  preview_domain?: string;
   /** KasmVNC URL for desktop templates. */
   desktop_url?: string;
   created_at: string;
   updated_at: string;
+}
+
+export interface ComputerViewerPasswordStatus {
+  computer_id?: ComputerId | string;
+  password_set: boolean;
+  password_set_at?: string | null;
+  viewer_password_set_at?: string | null;
+  rotated_at?: string | null;
+}
+
+export interface ComputerViewerPasswordRotation extends ComputerViewerPasswordStatus {
+  viewer_password: string;
+  password?: string;
 }
 
 // ─── Network Policy ───────────────────────────────────────────────────────────
@@ -335,7 +366,7 @@ export interface DirListResult {
   };
 }
 
-// ─── Agent / CUA ─────────────────────────────────────────────────────────────
+// ─── Computer Control Sessions ───────────────────────────────────────────────
 
 export type AgentSessionStatus =
   | "pending"
@@ -453,7 +484,11 @@ export type {
 // ─── Client config ───────────────────────────────────────────────────────────
 
 export interface MiosaClientConfig {
-  apiKey: string;
+  apiKey?: string;
+  /** User JWT required for organization switching. */
+  accessToken?: string;
+  /** Organization UUID or slug sent as X-MIOSA-Tenant on every request. */
+  tenant?: string;
   baseUrl?: string;
   timeout?: number;
   maxRetries?: number;

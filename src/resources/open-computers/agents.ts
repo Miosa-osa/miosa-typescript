@@ -33,6 +33,31 @@ export class Agents {
     return `/opencomputers/hosts/${hostId}/agent`;
   }
 
+  private unwrapSession(payload: unknown): OcAgentSessionData {
+    const value =
+      payload && typeof payload === "object" && "session" in payload
+        ? (payload as { session: unknown }).session
+        : payload && typeof payload === "object" && "data" in payload
+          ? (payload as { data: unknown }).data
+          : payload;
+
+    const session = value as OcAgentSessionData;
+    if (!session.id && session.session_id) {
+      return { ...session, id: session.session_id };
+    }
+    return session;
+  }
+
+  private unwrapList(payload: unknown): AgentSessionListResponse {
+    if (payload && typeof payload === "object" && "sessions" in payload) {
+      return { data: (payload as { sessions: OcAgentSessionData[] }).sessions };
+    }
+    if (Array.isArray(payload)) {
+      return { data: payload as OcAgentSessionData[] };
+    }
+    return payload as AgentSessionListResponse;
+  }
+
   /**
    * Dispatch a new agent session on the host.
    */
@@ -40,19 +65,16 @@ export class Agents {
     hostId: HostId | string,
     params: AgentDispatchParams,
   ): Promise<OcAgentSessionData> {
-    return this.http.post<OcAgentSessionData>(
-      `${this.base(hostId)}/dispatch`,
-      params,
-    );
+    const payload = await this.http.post<unknown>(`${this.base(hostId)}/dispatch`, params);
+    return this.unwrapSession(payload);
   }
 
   /**
    * List all agent sessions for a host.
    */
   async list(hostId: HostId | string): Promise<AgentSessionListResponse> {
-    return this.http.get<AgentSessionListResponse>(
-      `${this.base(hostId)}/sessions`,
-    );
+    const payload = await this.http.get<unknown>(`${this.base(hostId)}/sessions`);
+    return this.unwrapList(payload);
   }
 
   /**
@@ -62,9 +84,8 @@ export class Agents {
     hostId: HostId | string,
     sessionId: string,
   ): Promise<OcAgentSessionData> {
-    return this.http.get<OcAgentSessionData>(
-      `${this.base(hostId)}/sessions/${sessionId}`,
-    );
+    const payload = await this.http.get<unknown>(`${this.base(hostId)}/sessions/${sessionId}`);
+    return this.unwrapSession(payload);
   }
 
   /**

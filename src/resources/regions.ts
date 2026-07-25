@@ -30,6 +30,14 @@ export interface TemplateData {
   [key: string]: unknown;
 }
 
+export interface ComputeCatalogData {
+  products?: Array<Record<string, unknown>>;
+  regions?: Array<Record<string, unknown>>;
+  sizes?: Array<Record<string, unknown>>;
+  templates?: Array<Record<string, unknown>>;
+  [key: string]: unknown;
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function unwrap<T>(payload: unknown): T {
@@ -64,6 +72,12 @@ export class Regions {
   async listRegions(): Promise<RegionData[]> {
     const data = await this.http.get<unknown>("/compute/regions");
     return listItems<RegionData>(data);
+  }
+
+  /** Get canonical compute catalog, including product templates and readiness. */
+  async catalog(): Promise<ComputeCatalogData> {
+    const data = await this.http.get<unknown>("/compute/catalog");
+    return unwrap<ComputeCatalogData>(data);
   }
 
   /** List available compute sizes. */

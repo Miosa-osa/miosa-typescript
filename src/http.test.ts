@@ -1,12 +1,18 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   AuthError,
+  InstallationRequiredError,
+  ManagedProviderBindingOnlyError,
   InsufficientCreditsError,
   MiosaError,
   NetworkError,
   NotFoundError,
+  ProjectNotLinkedError,
   RateLimitError,
+  ScopeNotAllowedError,
   TimeoutError,
+  TokenRefreshFailedError,
+  UserAuthorizationRequiredError,
 } from "./errors.js";
 import { HttpClient, isHttp2Available, whenTransportReady } from "./http.js";
 
@@ -208,6 +214,77 @@ describe("HttpClient", () => {
       expect((err as MiosaError).status).toBe(500);
     });
 
+    it("should throw typed Connect errors by backend code", async () => {
+      mockFetch(403, {
+        error: {
+          code: "PROJECT_NOT_LINKED",
+          message: "Project is not linked to connector",
+        },
+      });
+      const client = makeClient();
+      const err = await client.get("/connect/token/github%2Facme").catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(ProjectNotLinkedError);
+      expect((err as MiosaError).code).toBe("PROJECT_NOT_LINKED");
+    });
+
+    it("should preserve Connect scope and managed-provider typed errors", async () => {
+      mockFetch(403, {
+        error: { code: "SCOPE_NOT_ALLOWED", message: "Scope is not allowed" },
+      });
+      const scopeClient = makeClient();
+      await expect(scopeClient.get("/connect/token/github%2Facme")).rejects.toBeInstanceOf(
+        ScopeNotAllowedError,
+      );
+
+      mockFetch(403, {
+        error: {
+          code: "MANAGED_PROVIDER_BINDING_ONLY",
+          message: "Managed connector cannot return a raw token",
+        },
+      });
+      const managedClient = makeClient();
+      await expect(managedClient.get("/connect/token/refero%2Fdesign")).rejects.toBeInstanceOf(
+        ManagedProviderBindingOnlyError,
+      );
+    });
+
+    it("should preserve Connect installation and user authorization typed errors", async () => {
+      mockFetch(409, {
+        error: {
+          code: "INSTALLATION_REQUIRED",
+          message: "Connector installation required",
+        },
+      });
+      const installationClient = makeClient();
+      await expect(
+        installationClient.get("/connect/token/linear%2Fworkspace"),
+      ).rejects.toBeInstanceOf(InstallationRequiredError);
+
+      mockFetch(403, {
+        error: {
+          code: "USER_AUTHORIZATION_REQUIRED",
+          message: "User authorization required",
+        },
+      });
+      const userAuthClient = makeClient();
+      await expect(userAuthClient.get("/connect/token/linear%2Fworkspace")).rejects.toBeInstanceOf(
+        UserAuthorizationRequiredError,
+      );
+    });
+
+    it("should preserve Connect token refresh typed errors", async () => {
+      mockFetch(502, {
+        error: {
+          code: "TOKEN_REFRESH_FAILED",
+          message: "Provider token refresh failed",
+        },
+      });
+      const client = makeClient();
+      await expect(client.get("/connect/token/github%2Facme")).rejects.toBeInstanceOf(
+        TokenRefreshFailedError,
+      );
+    });
+
     it("should include requestId from x-request-id header", async () => {
       mockFetch(
         404,
@@ -315,6 +392,19 @@ describe("HttpClient", () => {
 });
 
 describe("MiosaError", () => {
+  it("preserves flat structured errors and body request ids", () => {
+    const err = MiosaError.fromResponse(422, {
+      error: "EMAIL_MISMATCH",
+      detail: "Invite email does not match",
+      details: { expected: "a@example.com" },
+      request_id: "req_body",
+    });
+    expect(err.code).toBe("EMAIL_MISMATCH");
+    expect(err.message).toBe("Invite email does not match");
+    expect(err.details).toEqual({ expected: "a@example.com" });
+    expect(err.requestId).toBe("req_body");
+  });
+
   it("should carry status, code, and message", () => {
     const err = new MiosaError("Something broke", 500, "INTERNAL_ERROR", {
       detail: true,

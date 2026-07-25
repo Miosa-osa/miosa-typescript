@@ -1,5 +1,32 @@
 # Changelog
 
+## [1.2.22] - 2026-06-23
+
+### Fixed
+- Export `SandboxExecEvent` and `SandboxExecRunner` from the public TypeScript SDK entrypoint.
+
+## [1.2.21] - 2026-06-23
+
+### Added
+- `sandbox.exposeInfo()` / `sandbox.preview.exposeInfo()` return the full preview URL contract: `url`, `url_class`, `stable_for_embedding`, and `recommended_next_action`.
+
+### Fixed
+- Preview URL fallbacks use `miosa.ai`.
+
+## [1.2.19] - 2026-06-22
+
+### Added
+- Computer external viewer-password helpers:
+  - `miosa.computers.viewerPassword(id)`
+  - `miosa.computers.rotateViewerPassword(id)`
+  - `computer.viewerPassword()`
+  - `computer.rotateViewerPassword()`
+
+### Changed
+- Computer size types now expose canonical `xs`, `small`, `medium`, `large`, `xl`.
+- `computers.create({ size: "xlarge" })` normalizes the legacy alias to `xl`.
+- Computer examples use the canonical fast desktop profile: `miosa-desktop` + `small`.
+
 ## [0.3.0] - 2026-04-19
 
 ### Added

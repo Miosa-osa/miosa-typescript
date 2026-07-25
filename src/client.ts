@@ -1,20 +1,30 @@
 import { HttpClient } from "./http.js";
 import { Admin } from "./resources/admin.js";
+import { AgentRunGroups } from "./resources/agent-run-groups.js";
+import { AgentRuns } from "./resources/agent-runs.js";
+import { RunGroups } from "./resources/run-groups.js";
+import { AgentRuntimeProfiles } from "./resources/agent-runtime-profiles.js";
+import { Runs } from "./resources/runs.js";
 import { Analytics } from "./resources/analytics.js";
 import { ApiKeys } from "./resources/api-keys.js";
+import { AppDocuments } from "./resources/app-documents.js";
 import { AuditLog } from "./resources/audit-log.js";
 import { Benchmarks } from "./resources/benchmarks.js";
 import { BuilderSessions } from "./resources/builder-sessions.js";
 import { Channels } from "./resources/channels.js";
+import { Cloud } from "./resources/cloud.js";
 import { CommandCenter } from "./resources/command-center.js";
 import { Community } from "./resources/community.js";
 import { Completions } from "./resources/completions.js";
 import { Computers } from "./resources/computers.js";
+import { Connectors } from "./resources/connectors.js";
 import { Credits } from "./resources/credits.js";
 import { CronJobs } from "./resources/cron-jobs.js";
 import { Dashboard } from "./resources/dashboard.js";
 import { Databases } from "./resources/databases.js";
 import { Deployments } from "./resources/deployments.js";
+import { Devices } from "./resources/devices.js";
+import { DockerDeploy } from "./resources/docker-deploy.js";
 import { EgressAudit } from "./resources/egressAudit.js";
 import { EgressNetwork } from "./resources/egressNetwork.js";
 import { EgressSecrets } from "./resources/egressSecrets.js";
@@ -32,13 +42,17 @@ import { ProjectAuth } from "./resources/project-auth.js";
 import { ProjectIntegrations } from "./resources/project-integrations.js";
 import { ProviderDefaults } from "./resources/provider-defaults.js";
 import { Regions } from "./resources/regions.js";
+import { RuntimeEnv } from "./resources/runtime-env.js";
+import { RuntimeCapabilitiesResource } from "./resources/runtime-capabilities.js";
 import { Sandboxes } from "./resources/sandboxes.js";
 import { SandboxTemplates } from "./resources/sandbox-templates.js";
 import { Settings } from "./resources/settings.js";
 import { SnapshotsStandalone } from "./resources/snapshots-standalone.js";
 import { Storage } from "./resources/storage.js";
 import { OrgInvites } from "./resources/org-invites.js";
+import { Organizations } from "./resources/organizations.js";
 import { Tenant } from "./resources/tenant.js";
+import { Templates } from "./resources/templates.js";
 import { Usage } from "./resources/usage.js";
 import { Volumes } from "./resources/volumes.js";
 import { Webhooks } from "./resources/webhooks.js";
@@ -78,6 +92,8 @@ export class Miosa {
    * Requires admin/owner role for write operations.
    */
   readonly orgInvites: OrgInvites;
+  /** Organizations available to the user session, membership, invites, and switching. */
+  readonly organizations: Organizations;
 
   /** Current tenant plan, limits, and live usage counters. */
   readonly tenant: Tenant;
@@ -103,6 +119,9 @@ export class Miosa {
   /** Notification channels — Slack, Discord, email, etc. */
   readonly channels: Channels;
 
+  /** Cloud accounts / BYOC / cloudburst control-plane state. */
+  readonly cloud: Cloud;
+
   /** OAuth integrations — GitHub, Slack, Linear, Discord. */
   readonly integrations: Integrations;
 
@@ -112,11 +131,41 @@ export class Miosa {
   /** Built-in auth for generated apps inside sandboxes/deployments. */
   readonly projectAuth: ProjectAuth;
 
+  /** Durable generated App Documents, exact-version reviews, and publication bindings. */
+  readonly appDocuments: AppDocuments;
+
   /** BYOK encrypted per-user provider keys. */
   readonly externalKeys: ExternalKeys;
 
   /** Model Context Protocol — JSON-RPC dispatch + streaming channel. */
   readonly mcp: Mcp;
+
+  /** Runs - instruction dispatch into sandbox and computer targets. */
+  readonly runs: Runs;
+
+  /** Run groups - durable multi-run orchestration groups. */
+  readonly runGroups: RunGroups;
+
+  /** Agent runs - compatibility API for prompt dispatch. */
+  readonly agentRuns: AgentRuns;
+
+  /** Agent run groups - compatibility API for multi-agent orchestration. */
+  readonly agentRunGroups: AgentRunGroups;
+
+  /** Agent runtime profiles — tenant/workspace defaults for sandbox/computer agents. */
+  readonly agentRuntimeProfiles: AgentRuntimeProfiles;
+
+  /** MIOSA Connect — provider connectors and runtime tokens. */
+  readonly connectors: Connectors;
+
+  /** Inherited runtime env — tenant/workspace/project defaults for agent runtimes. */
+  readonly runtimeEnv: RuntimeEnv;
+
+  /** Runtime capabilities — live backend feature and contract discovery. */
+  readonly runtimeCapabilities: RuntimeCapabilitiesResource;
+
+  /** Unified devices — sandbox workers and desktop computers behind one API. */
+  readonly devices: Devices;
 
   /** Computer management — create, list, get, delete. */
   readonly computers: Computers;
@@ -129,6 +178,9 @@ export class Miosa {
    * Versions, releases, rollback, custom domains.
    */
   readonly deployments: Deployments;
+
+  /** App Engine appliance hosts — one always-on workspace host, many apps. */
+  readonly dockerDeploy: DockerDeploy;
 
   /** Credit balance and usage. */
   readonly credits: Credits;
@@ -168,6 +220,9 @@ export class Miosa {
 
   /** Sandbox templates — CRUD, build-spec schema, builds. */
   readonly sandboxTemplates: SandboxTemplates;
+
+  /** Product-aware templates — catalog/readiness for sandbox, computer, appliance. */
+  readonly templates: Templates;
 
   /** API key management — list, create, delete. */
   readonly apiKeys: ApiKeys;
@@ -218,13 +273,17 @@ export class Miosa {
   private readonly http: HttpClient;
 
   constructor(config: MiosaClientConfig) {
-    if (!config.apiKey) {
+    if (config.apiKey && config.accessToken) {
+      throw new Error("Miosa: pass either apiKey or accessToken, not both.");
+    }
+    const credential = config.accessToken ?? config.apiKey;
+    if (!credential) {
       throw new Error(
-        'Miosa: apiKey is required. Pass { apiKey: "msk_u_..." } or set MIOSA_API_KEY.',
+        'Miosa: apiKey or accessToken is required.',
       );
     }
 
-    if (!config.apiKey.startsWith("msk_")) {
+    if (config.apiKey && !config.apiKey.startsWith("msk_")) {
       // Soft warning — allow non-standard keys in tests / self-hosted
       console.warn(
         '[miosa] Warning: API key does not start with "msk_". Double-check your key.',
@@ -233,7 +292,8 @@ export class Miosa {
 
     this.http = new HttpClient({
       baseUrl: config.baseUrl ?? DEFAULT_BASE_URL,
-      apiKey: config.apiKey,
+      apiKey: credential,
+      ...(config.tenant ? { tenant: config.tenant } : {}),
       timeout: config.timeout ?? DEFAULT_TIMEOUT,
       maxRetries: config.maxRetries ?? DEFAULT_MAX_RETRIES,
     });
@@ -241,6 +301,7 @@ export class Miosa {
     this.workspaceMembers = new WorkspaceMembers(this.http);
     this.workspaceInvites = new WorkspaceInvites(this.http);
     this.orgInvites = new OrgInvites(this.http);
+    this.organizations = new Organizations(this.http);
     this.tenant = new Tenant(this.http);
     this.regions = new Regions(this.http);
     this.settings = new Settings(this.http);
@@ -249,14 +310,26 @@ export class Miosa {
     this.auditLog = new AuditLog(this.http);
     this.usage = new Usage(this.http);
     this.channels = new Channels(this.http);
+    this.cloud = new Cloud(this.http);
     this.integrations = new Integrations(this.http);
     this.projectIntegrations = new ProjectIntegrations(this.http);
     this.projectAuth = new ProjectAuth(this.http);
+    this.appDocuments = new AppDocuments(this.http);
     this.externalKeys = new ExternalKeys(this.http);
     this.mcp = new Mcp(this.http);
+    this.runs = new Runs(this.http);
+    this.runGroups = new RunGroups(this.http);
+    this.agentRuns = new AgentRuns(this.http);
+    this.agentRunGroups = new AgentRunGroups(this.http);
+    this.agentRuntimeProfiles = new AgentRuntimeProfiles(this.http);
+    this.connectors = new Connectors(this.http);
+    this.runtimeEnv = new RuntimeEnv(this.http);
+    this.runtimeCapabilities = new RuntimeCapabilitiesResource(this.http);
+    this.devices = new Devices(this.http);
     this.computers = new Computers(this.http);
     this.sandboxes = new Sandboxes(this.http);
     this.deployments = new Deployments(this.http);
+    this.dockerDeploy = new DockerDeploy(this.http);
     this.credits = new Credits(this.http);
     this.admin = new Admin(this.http);
     this.openComputers = new OpenComputers(this.http);
@@ -269,6 +342,7 @@ export class Miosa {
     this.healthChecks = new HealthChecks(this.http);
     this.webhooks = new Webhooks(this.http);
     this.sandboxTemplates = new SandboxTemplates(this.http);
+    this.templates = new Templates(this.http);
     this.apiKeys = new ApiKeys(this.http);
     this.models = new Models(this.http);
     this.completions = new Completions(this.http);

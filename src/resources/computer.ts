@@ -1,5 +1,10 @@
 import { HttpClient } from "../http.js";
-import type { ComputerData, ComputerId } from "../types.js";
+import type {
+  ComputerData,
+  ComputerId,
+  ComputerViewerPasswordRotation,
+  ComputerViewerPasswordStatus,
+} from "../types.js";
 import { Checkpoints } from "./checkpoints.js";
 import { ComputerAutoStop } from "./computer-auto-stop.js";
 import { ComputerEnv } from "./computer-env.js";
@@ -8,6 +13,7 @@ import { ComputerOsa } from "./computer-osa.js";
 import { ComputerPorts } from "./computer-ports.js";
 import { ComputerTerminal } from "./computer-terminal.js";
 import { ComputerVolumes } from "./computer-volumes.js";
+import { ComputerConnectors } from "./connectors.js";
 import { CustomDomains } from "./custom_domains.js";
 import { Desktop } from "./desktop.js";
 import { ComputerAudit } from "./egressAudit.js";
@@ -17,6 +23,16 @@ import { Events } from "./events.js";
 import { Exec } from "./exec.js";
 import { Files } from "./files.js";
 import { NetworkPolicy } from "./network_policy.js";
+import {
+  AgentRuns,
+  type AgentRun,
+  type AgentRunCreateParams,
+} from "./agent-runs.js";
+import {
+  Runs,
+  type Run,
+  type RunCreateParams,
+} from "./runs.js";
 
 /**
  * Per-computer inbox config (GET/PATCH /computers/:id/inbox).
@@ -58,6 +74,16 @@ function unwrapData(data: unknown): Record<string, unknown> {
   }
   return (data ?? {}) as Record<string, unknown>;
 }
+
+export type ComputerRunOptions = Omit<
+  RunCreateParams,
+  "instruction" | "targetKind" | "targetId" | "sandboxId" | "computerId"
+>;
+
+export type ComputerPromptOptions = Omit<
+  AgentRunCreateParams,
+  "prompt" | "targetKind" | "targetId" | "sandboxId" | "computerId"
+>;
 
 /**
  * A Computer instance bound to a specific computer ID.
@@ -115,6 +141,9 @@ export class Computer {
   /** Volume attachment — list, attach, detach. */
   readonly volumes: ComputerVolumes;
 
+  /** MIOSA Connect provider bindings scoped to this computer. */
+  readonly connectors: ComputerConnectors;
+
   /** Encrypted secrets + OAuth credentials scoped to this computer. */
   readonly secrets: ComputerSecrets;
 
@@ -146,6 +175,7 @@ export class Computer {
     this.logs = new ComputerLogs(http, id);
     this.ports = new ComputerPorts(http, id);
     this.volumes = new ComputerVolumes(http, id);
+    this.connectors = new ComputerConnectors(http, id);
     // Egress (security) namespaces — pre-scoped to this computer id.
     this.secrets = new ComputerSecrets(http, id);
     this.network = new ComputerNetwork(http, id);
@@ -176,21 +206,26 @@ export class Computer {
    * ```ts
    * await computer.exec.bash("npm run dev &");
    * const url = computer.previewUrl(3000);
-   * // => https://3000-<slug>.sandbox.miosa.ai
+   * // => https://3000-<slug>.sandbox.<tenant-domain>
    * ```
    *
    * Works for any TCP HTTP listener. Public (no auth required); anyone with
    * the URL can see it. Served over the ingress proxy so it inherits the
-   * wildcard TLS cert — no per-sandbox certs to manage.
+   * tenant's white-label preview domain — no per-sandbox certs to manage.
    */
   previewUrl(port: number, path: string = "/"): string {
     const p = path.startsWith("/") ? path : `/${path}`;
-    return `https://${port}-${this.slug}.sandbox.miosa.ai${p}`;
+    return `https://${port}-${this.slug}.sandbox.${this.previewDomain}${p}`;
   }
 
   /** Root preview URL — serves whatever is on the default app port. */
   get publicUrl(): string {
-    return `https://${this.slug}.sandbox.miosa.ai`;
+    return `https://${this.slug}.sandbox.${this.previewDomain}`;
+  }
+
+  /** Tenant's preview/base domain, white-label aware. */
+  get previewDomain(): string {
+    return this.data.preview_domain || "miosa.ai";
   }
 
   // ─── Lifecycle ─────────────────────────────────────────────────────────────
@@ -231,6 +266,50 @@ export class Computer {
   async reload(): Promise<Computer> {
     this.data = await this.http.get<ComputerData>(`/computers/${this.id}`);
     return this;
+  }
+
+  /**
+   * Run an AI agent inside this Computer.
+   *
+   * The Computer is the graphical desktop VM product. This dispatches the
+   * same Runs API as `miosa agent run --computer`, scoped to this VM.
+   */
+  async run(
+    instruction: string,
+    options: ComputerRunOptions = {},
+  ): Promise<Run> {
+    const runner = options.runner ?? "claude-code";
+
+    return new Runs(this.http).run({
+      ...options,
+      instruction,
+      targetKind: "computer",
+      targetId: this.id,
+      runtimeId: this.id,
+      computerId: this.id,
+      runner,
+      cwd: options.cwd ?? "/workspace",
+      wait: options.wait ?? true,
+    });
+  }
+
+  /**
+   * Dispatch a prompt into this Computer through the Agent Runs API.
+   */
+  async prompt(
+    prompt: string,
+    options: ComputerPromptOptions = {},
+  ): Promise<AgentRun> {
+    return new AgentRuns(this.http).run({
+      ...options,
+      prompt,
+      targetKind: "computer",
+      targetId: this.id,
+      computerId: this.id,
+      provider: options.provider ?? "claude",
+      cwd: options.cwd ?? "/workspace",
+      wait: options.wait ?? true,
+    });
   }
 
   // ─── Desktop shortcuts ─────────────────────────────────────────────────────
@@ -282,6 +361,16 @@ export class Computer {
     await this.desktop.doubleClick(x, y);
   }
 
+  /** Middle-button click. */
+  async middleClick(x: number, y: number): Promise<void> {
+    await this.desktop.click(x, y, "middle");
+  }
+
+  /** Move the pointer without clicking. */
+  async moveMouse(x: number, y: number): Promise<void> {
+    await this.desktop.moveMouse(x, y);
+  }
+
   /**
    * Type text into the focused element.
    * Shortcut for `computer.desktop.type(text)`.
@@ -290,12 +379,22 @@ export class Computer {
     await this.desktop.type(text);
   }
 
+  /** Alias for `type(text)`. */
+  async write(text: string): Promise<void> {
+    await this.desktop.write(text);
+  }
+
   /**
    * Send a key or key combo.
    * Shortcut for `computer.desktop.key(key)`.
    */
   async key(key: string): Promise<void> {
     await this.desktop.key(key);
+  }
+
+  /** Alias for `key(key)`. */
+  async press(key: string): Promise<void> {
+    await this.desktop.press(key);
   }
 
   /**
@@ -397,6 +496,29 @@ export class Computer {
     );
   }
 
+  /**
+   * Return whether the external/raw desktop viewer password is set.
+   *
+   * Authenticated MIOSA platform users should use the platform desktop entry
+   * URL and do not need this password. This is only for raw external viewer
+   * links such as `*.computer.miosa.ai/desktop/index.html`.
+   */
+  async viewerPassword(): Promise<ComputerViewerPasswordStatus> {
+    return this.http.get<ComputerViewerPasswordStatus>(
+      `/computers/${this.id}/viewer-password`,
+    );
+  }
+
+  /**
+   * Rotate the external/raw desktop viewer password and return the plaintext
+   * one time. Store it if you need to share the raw viewer URL.
+   */
+  async rotateViewerPassword(): Promise<ComputerViewerPasswordRotation> {
+    return this.http.post<ComputerViewerPasswordRotation>(
+      `/computers/${this.id}/viewer-password/rotate`,
+    );
+  }
+
   /** List installed apps inside the VM. */
   async apps(): Promise<Record<string, unknown>> {
     return unwrapData(
@@ -415,6 +537,18 @@ export class Computer {
   async streamToken(): Promise<Record<string, unknown>> {
     return unwrapData(
       await this.http.post<unknown>(`/computers/${this.id}/stream-token`),
+    );
+  }
+
+  /**
+   * Mint a passwordless browser embed URL for authenticated platform sessions.
+   *
+   * Use this inside MIOSA or tenant apps. Raw shared desktop URLs can still use
+   * the viewer password flow when opened outside an authenticated platform.
+   */
+  async embed(): Promise<Record<string, unknown>> {
+    return unwrapData(
+      await this.http.get<unknown>(`/computers/${this.id}/embed`),
     );
   }
 

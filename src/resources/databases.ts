@@ -15,6 +15,7 @@ export type DatabaseId = string & { readonly __brand: "DatabaseId" };
 export interface DatabaseData {
   id: DatabaseId;
   tenant_id: string;
+  environment_id?: string | null;
   name: string;
   state?: string;
   engine?: string;
@@ -72,6 +73,9 @@ export interface DatabaseCreateParams {
   /** @deprecated use cpu_count/memory_mb/storage_mb. */
   size?: string;
   region?: string;
+  workspace_id?: string;
+  project_id?: string;
+  environment_id?: string;
   idempotencyKey?: string;
   idempotency_key?: string;
   [key: string]: unknown;

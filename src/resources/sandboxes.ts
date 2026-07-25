@@ -1,8 +1,16 @@
-import { MiosaError } from "../errors.js";
+import { MiosaError, NotFoundError } from "../errors.js";
 import { HttpClient } from "../http.js";
+import { SDK_USER_AGENT } from "../version.js";
 import { SandboxAudit } from "./egressAudit.js";
 import { SandboxNetwork } from "./egressNetwork.js";
 import { SandboxSecrets } from "./egressSecrets.js";
+import { SandboxConnectors } from "./connectors.js";
+import {
+  AgentRuns,
+  type AgentRun,
+  type AgentRunCreateParams,
+} from "./agent-runs.js";
+import { Runs, type Run, type RunCreateParams } from "./runs.js";
 
 function encodeContent(content: string | Uint8Array): string {
   const bytes =
@@ -19,19 +27,28 @@ function encodeContent(content: string | Uint8Array): string {
 }
 
 export const SANDBOX_TEMPLATE = "miosa-sandbox";
+export type SandboxSize = "xs" | "small" | "medium" | "large" | "xl";
+
+const SANDBOX_SHAPE_CONTRACTS: Record<
+  SandboxSize,
+  { cpuCount: number; memoryMb: number; diskSizeMb: number }
+> = {
+  xs: { cpuCount: 1, memoryMb: 2_048, diskSizeMb: 10_240 },
+  small: { cpuCount: 2, memoryMb: 4_096, diskSizeMb: 10_240 },
+  medium: { cpuCount: 4, memoryMb: 8_192, diskSizeMb: 20_480 },
+  large: { cpuCount: 8, memoryMb: 16_384, diskSizeMb: 40_960 },
+  xl: { cpuCount: 16, memoryMb: 32_768, diskSizeMb: 81_920 },
+};
 
 export type SandboxId = string & { readonly __brand: "SandboxId" };
 export type SandboxState =
-  | "provisioning"
-  | "running"
-  | "paused"
-  | "destroyed"
-  | "error";
+  "provisioning" | "running" | "paused" | "destroyed" | "error";
 
 export interface SandboxCreateParams {
   templateId?: string;
   template_id?: string;
   image?: string;
+  size?: SandboxSize;
   cpuCount?: number;
   cpu_count?: number;
   memoryMb?: number;
@@ -44,8 +61,32 @@ export interface SandboxCreateParams {
   timeout_sec?: number;
   idleTimeoutSec?: number;
   idle_timeout_sec?: number;
+  /**
+   * Persistence policy for builder/agent sandboxes.
+   *
+   * MIOSA persistence means the sandbox should snapshot/pause when idle and
+   * resume from that checkpoint later. It does not mean "keep CPU running".
+   * Use alwaysOn for a sandbox that must keep executing without idle pause.
+   */
+  persistent?: boolean;
+  snapshotExpirationSec?: number;
+  snapshot_expiration_sec?: number;
+  snapshotExpirationDays?: number;
+  snapshot_expiration_days?: number;
+  keepLastSnapshots?:
+    number | { count: number; expirationSec?: number; deleteEvicted?: boolean };
+  keep_last_snapshots?:
+    | number
+    | { count: number; expiration_sec?: number; delete_evicted?: boolean };
   alwaysOn?: boolean;
   always_on?: boolean;
+  /**
+   * Opt in to the in-sandbox L3 token carrying the `provision` scope, so code
+   * running inside the sandbox can call database/deployment create. Defaults
+   * to false on the server when omitted.
+   */
+  allowProvision?: boolean;
+  allow_provision?: boolean;
   env?: Record<string, string>;
   metadata?: Record<string, unknown>;
   services?: Array<Record<string, unknown>>;
@@ -65,6 +106,25 @@ export interface SandboxCreateParams {
   idempotencyKey?: string;
   idempotency_key?: string;
   slug?: string;
+  agentRuntimeProfileId?: string;
+  agent_runtime_profile_id?: string;
+  agentProfileId?: string;
+  agent_profile_id?: string;
+  skipRuntimeProfile?: boolean;
+  skip_agent_runtime_profile?: boolean;
+  // Canonical MIOSA ownership. Slugs and names are resolved by the control plane.
+  workspaceId?: string;
+  workspace_id?: string;
+  workspaceSlug?: string;
+  workspace_slug?: string;
+  workspaceName?: string;
+  workspace_name?: string;
+  projectId?: string;
+  project_id?: string;
+  projectSlug?: string;
+  project_slug?: string;
+  projectName?: string;
+  project_name?: string;
   // White-label attribution. See platform/attribution docs.
   externalWorkspaceId?: string;
   external_workspace_id?: string;
@@ -73,6 +133,21 @@ export interface SandboxCreateParams {
   externalProjectId?: string;
   external_project_id?: string;
 }
+
+export interface SandboxGetOrCreateParams extends SandboxCreateParams {
+  name: string;
+  /** Resume an existing paused sandbox before returning it. Defaults to true. */
+  resume?: boolean;
+  /** Wait for readiness before returning a created/resumed sandbox. Defaults to false. */
+  waitUntilReady?: boolean;
+  /** Readiness wait timeout in seconds. Defaults to 60 when waitUntilReady is true. */
+  waitTimeoutSec?: number;
+}
+
+const AGENT_WORKSPACE_TIMEOUT_SEC = 86_400;
+const AGENT_WORKSPACE_IDLE_TIMEOUT_SEC = 1_800;
+const AGENT_WORKSPACE_SNAPSHOT_EXPIRATION_DAYS = 30;
+const AGENT_WORKSPACE_KEEP_LAST_SNAPSHOTS = 1;
 
 export interface SandboxListParams {
   state?: SandboxState | string;
@@ -104,6 +179,33 @@ export interface SandboxExecResult {
   duration_ms?: number;
 }
 
+export interface SandboxExportFile {
+  path: string;
+  filename?: string;
+  download_url?: string;
+  downloadUrl?: string;
+}
+
+export interface SandboxExport {
+  id: string;
+  sandbox_id?: string;
+  sandboxId?: string;
+  label?: string | null;
+  status: string;
+  files: SandboxExportFile[];
+  archive_download_url?: string;
+  archiveDownloadUrl?: string;
+  created_at?: string;
+  createdAt?: string;
+}
+
+export interface SandboxExportParams {
+  path?: string;
+  paths?: string[];
+  label?: string;
+  filename?: string;
+}
+
 export type SandboxExecEvent =
   | { type?: "stdout"; line: string }
   | { type?: "stderr"; line: string }
@@ -125,6 +227,8 @@ export interface SandboxExecRunner {
 export interface SandboxData {
   id: SandboxId;
   state: SandboxState;
+  slug?: string;
+  name?: string | null;
   ready?: boolean;
   template_id?: string;
   image_id?: string | null;
@@ -133,16 +237,101 @@ export interface SandboxData {
   disk_mb?: number | null;
   disk_size_mb?: number | null;
   timeout_sec?: number | null;
+  timeout_remaining_ms?: number | null;
+  idle_timeout_sec?: number;
+  always_on?: boolean;
+  persistent?: boolean;
   boot_path?: string | null;
   boot_ms?: number | null;
   ready_at?: string | null;
   preview_url?: string | null;
+  url_info?: PreviewUrlInfo | null;
+  url_class?: PreviewUrlClass | null;
+  stable_for_embedding?: boolean | null;
+  recommended_next_action?: PreviewUrlAction | null;
   metadata?: Record<string, unknown>;
   inserted_at?: string;
   created_at?: string;
   started_at?: string | null;
   destroyed_at?: string | null;
   total_runtime_sec?: number | null;
+  external_workspace_id?: string | null;
+  external_user_id?: string | null;
+  external_project_id?: string | null;
+}
+
+export interface SandboxUsage {
+  sandbox_id: string;
+  state: string;
+  runtime_sec: number;
+  provisioned_vcpu_ms: number;
+  provisioned_memory_mb_ms: number | null;
+  creation_count: number;
+  active_cpu_ms: number | null;
+  network_ingress_bytes: number | null;
+  network_egress_bytes: number | null;
+  measurement_status: {
+    active_cpu: string;
+    network: string;
+    provisioned_resources: "measured";
+  };
+  estimated_cost_cents: number;
+  timeout_sec: number;
+  timeout_remaining_ms: number | null;
+}
+
+export interface SandboxForkParams {
+  timeoutSec?: number;
+  timeout_sec?: number;
+  templateId?: string;
+  template_id?: string;
+  idempotencyKey?: string;
+  idempotency_key?: string;
+}
+
+export interface SandboxLegacyForkParams extends SandboxForkParams {
+  name?: string;
+  metadata?: Record<string, unknown>;
+}
+
+function isLegacyForkParams(
+  opts: SandboxForkParams | SandboxLegacyForkParams,
+): opts is SandboxLegacyForkParams {
+  return "name" in opts || "metadata" in opts;
+}
+
+export interface SandboxResourceContract {
+  id: string;
+  version: string;
+  product: string;
+  size: SandboxSize | string;
+  vcpus: number;
+  memory_mb: number;
+  disk_size_mb: number;
+}
+
+export type PreviewUrlClass =
+  | "temporary_preview"
+  | "always_on_preview"
+  | "stable_sandbox_embed"
+  | "durable_deployment"
+  | (string & {});
+
+export type PreviewUrlAction =
+  | "create_alias_or_publish"
+  | "publish_when_ready"
+  | "attach_custom_domain"
+  | (string & {});
+
+export interface PreviewUrlInfo {
+  url: string;
+  class: PreviewUrlClass;
+  url_class: PreviewUrlClass;
+  stable_for_embedding: boolean;
+  recommended_next_action: PreviewUrlAction;
+  alias_slug?: string | null;
+  port?: number | null;
+  [key: string]: unknown;
 }
 
 export interface SandboxTemplate {
@@ -318,12 +507,37 @@ export interface SandboxDeployParams {
   sourceSnapshotPath?: string;
   source_snapshot_path?: string;
   entrypoint?: string;
+  buildCommand?: string;
+  build_command?: string;
+  runCommand?: string;
+  run_command?: string;
+  startCommand?: string;
+  start_command?: string;
+  port?: number;
+  healthCheckPath?: string;
+  health_check_path?: string;
+  deploymentType?: "miosa_deploy" | "docker_deploy" | "docker-deploy" | string;
+  deployment_type?: "miosa_deploy" | "docker_deploy" | "docker-deploy" | string;
+  type?: "static" | "dynamic" | "server" | string;
+  mode?: "static" | "dynamic" | "server" | string;
+  database?: boolean | Record<string, unknown>;
+  resources?: Record<string, unknown>;
   domain?: string;
   customDomain?: string;
   custom_domain?: string;
   idempotencyKey?: string;
   idempotency_key?: string;
 }
+
+export type SandboxRunOptions = Omit<
+  RunCreateParams,
+  "instruction" | "targetKind" | "targetId" | "sandboxId" | "computerId"
+>;
+
+export type SandboxPromptOptions = Omit<
+  AgentRunCreateParams,
+  "prompt" | "targetKind" | "targetId" | "sandboxId" | "computerId"
+>;
 
 type WireEnvelope<T> = T | { data: T };
 
@@ -337,6 +551,28 @@ function unwrap<T>(payload: WireEnvelope<T>): T {
     return (payload as { data: T }).data;
   }
   return payload as T;
+}
+
+function normalizeExport(value: SandboxExport): SandboxExport {
+  const normalized: SandboxExport = {
+    ...value,
+    files: (value.files ?? []).map((file) => {
+      const normalized: SandboxExportFile = { ...file };
+      const downloadUrl = file.downloadUrl ?? file.download_url;
+      if (downloadUrl !== undefined) normalized.downloadUrl = downloadUrl;
+      return normalized;
+    }),
+  };
+  const sandboxId = value.sandboxId ?? value.sandbox_id;
+  const archiveDownloadUrl =
+    value.archiveDownloadUrl ?? value.archive_download_url;
+  const createdAt = value.createdAt ?? value.created_at;
+  if (sandboxId !== undefined) normalized.sandboxId = sandboxId;
+  if (archiveDownloadUrl !== undefined) {
+    normalized.archiveDownloadUrl = archiveDownloadUrl;
+  }
+  if (createdAt !== undefined) normalized.createdAt = createdAt;
+  return normalized;
 }
 
 function listItems(
@@ -356,17 +592,80 @@ function listItems(
 function createBody(params: SandboxCreateParams = {}): Record<string, unknown> {
   const templateId =
     params.templateId ?? params.template_id ?? params.image ?? SANDBOX_TEMPLATE;
+  const persistent = params.persistent;
+  const snapshotExpirationSec = snapshotExpirationSeconds(params);
+  const keepLastSnapshots =
+    params.keepLastSnapshots ?? params.keep_last_snapshots;
+  const legacyPersistencePolicy =
+    persistent !== undefined &&
+    (snapshotExpirationSec !== undefined || keepLastSnapshots !== undefined);
+  const metadata = { ...(params.metadata ?? {}) };
+  if (legacyPersistencePolicy) metadata.miosa_persistent = persistent;
+  const cpuCount = params.cpuCount ?? params.cpu_count;
+  const memoryMb = params.memoryMb ?? params.memory_mb;
+  const diskMb =
+    params.diskMb ?? params.disk_mb ?? params.diskSizeMb ?? params.disk_size_mb;
+  const suppliedResources = [cpuCount, memoryMb, diskMb].filter(
+    (value) => value !== undefined,
+  ).length;
+  if (suppliedResources !== 0 && suppliedResources !== 3) {
+    throw new TypeError(
+      "Raw sandbox resources require cpuCount, memoryMb, and diskSizeMb together. Prefer size.",
+    );
+  }
+
+  let resolvedSize = params.size;
+  if (suppliedResources === 3) {
+    const matchingSize = (
+      Object.entries(SANDBOX_SHAPE_CONTRACTS) as Array<
+        [SandboxSize, (typeof SANDBOX_SHAPE_CONTRACTS)[SandboxSize]]
+      >
+    ).find(
+      ([, contract]) =>
+        contract.cpuCount === cpuCount &&
+        contract.memoryMb === memoryMb &&
+        contract.diskSizeMb === diskMb,
+    )?.[0];
+    if (!matchingSize) {
+      throw new TypeError(
+        "Raw sandbox resources must exactly match a named size contract.",
+      );
+    }
+    if (resolvedSize && resolvedSize !== matchingSize) {
+      throw new TypeError(
+        `Raw sandbox resources match ${matchingSize}, not requested size ${resolvedSize}.`,
+      );
+    }
+    resolvedSize = matchingSize;
+  }
+
+  if (snapshotExpirationSec !== undefined) {
+    metadata.snapshot_expiration_sec = snapshotExpirationSec;
+  }
+  if (keepLastSnapshots !== undefined) {
+    metadata.keep_last_snapshots = keepLastSnapshots;
+  }
+
   return stripUndefined({
     template_id: templateId,
-    cpu_count: params.cpuCount ?? params.cpu_count,
-    memory_mb: params.memoryMb ?? params.memory_mb,
+    size: resolvedSize,
+    persistent,
+    cpu_count: cpuCount,
+    memory_mb: memoryMb,
     disk_mb: params.diskMb ?? params.disk_mb,
     disk_size_mb: params.diskSizeMb ?? params.disk_size_mb,
-    timeout_sec: params.timeoutSec ?? params.timeout_sec,
-    idle_timeout_sec: params.idleTimeoutSec ?? params.idle_timeout_sec,
+    timeout_sec:
+      params.timeoutSec ??
+      params.timeout_sec ??
+      (legacyPersistencePolicy && persistent === true ? 86_400 : undefined),
+    idle_timeout_sec:
+      params.idleTimeoutSec ??
+      params.idle_timeout_sec ??
+      (legacyPersistencePolicy && persistent === true ? 1_800 : undefined),
     always_on: params.alwaysOn ?? params.always_on,
+    allow_provision: params.allowProvision ?? params.allow_provision,
     env: params.env,
-    metadata: params.metadata,
+    metadata: Object.keys(metadata).length > 0 ? metadata : undefined,
     services: params.services,
     readiness_probe: params.readinessProbe ?? params.readiness_probe,
     database: params.database,
@@ -378,6 +677,19 @@ function createBody(params: SandboxCreateParams = {}): Record<string, unknown> {
     entrypoint: params.entrypoint,
     tags: params.tags,
     slug: params.slug,
+    agent_runtime_profile_id:
+      params.agentRuntimeProfileId ??
+      params.agent_runtime_profile_id ??
+      params.agentProfileId ??
+      params.agent_profile_id,
+    skip_agent_runtime_profile:
+      params.skipRuntimeProfile ?? params.skip_agent_runtime_profile,
+    workspace_id: params.workspaceId ?? params.workspace_id,
+    workspace_slug: params.workspaceSlug ?? params.workspace_slug,
+    workspace_name: params.workspaceName ?? params.workspace_name,
+    project_id: params.projectId ?? params.project_id,
+    project_slug: params.projectSlug ?? params.project_slug,
+    project_name: params.projectName ?? params.project_name,
     external_workspace_id:
       params.externalWorkspaceId ?? params.external_workspace_id,
     external_user_id: params.externalUserId ?? params.external_user_id,
@@ -403,6 +715,20 @@ function stripUndefined(
   return Object.fromEntries(
     Object.entries(input).filter(([, value]) => value !== undefined),
   );
+}
+
+function snapshotExpirationSeconds(params: {
+  snapshotExpirationSec?: number;
+  snapshot_expiration_sec?: number;
+  snapshotExpirationDays?: number;
+  snapshot_expiration_days?: number;
+}): number | undefined {
+  const seconds =
+    params.snapshotExpirationSec ?? params.snapshot_expiration_sec;
+  if (seconds !== undefined) return seconds;
+
+  const days = params.snapshotExpirationDays ?? params.snapshot_expiration_days;
+  return days === undefined ? undefined : days * 86_400;
 }
 
 export class SandboxCommands {
@@ -509,6 +835,10 @@ export class SandboxPreview {
   expose(port?: number): Promise<string> {
     return this.sandbox.expose(port);
   }
+
+  exposeInfo(port?: number): Promise<PreviewUrlInfo> {
+    return this.sandbox.exposeInfo(port);
+  }
 }
 
 export class SandboxArtifacts {
@@ -589,6 +919,14 @@ export class SandboxEvents {
     return (this.sandbox as unknown as { http: HttpClient }).http.stream<
       Record<string, unknown>
     >(`/sandboxes/${this.sandbox.id}/events`);
+  }
+}
+
+export class SandboxMetrics {
+  constructor(private readonly sandbox: Sandbox) {}
+
+  get(window = "1h"): Promise<Record<string, unknown>> {
+    return this.sandbox.metrics(window);
   }
 }
 
@@ -745,12 +1083,16 @@ export class Sandbox {
   readonly terminal: SandboxTerminal;
   /** SSE event stream. */
   readonly events: SandboxEvents;
+  /** Operational metrics and current resource state. */
+  readonly metricsResource: SandboxMetrics;
   /** Preview CRUD + share/revokeShare. */
   readonly previews: SandboxPreviews;
   /** Read-only env var listing. */
   readonly env: SandboxEnv;
   /** Tag replacement. */
   readonly tags: SandboxTags;
+  /** MIOSA Connect provider bindings scoped to this sandbox. */
+  readonly connectors: SandboxConnectors;
   /** Encrypted secrets + OAuth credentials scoped to this sandbox. */
   readonly secrets: SandboxSecrets;
   /** Egress allowlist + policies scoped to this sandbox. */
@@ -778,11 +1120,13 @@ export class Sandbox {
     this.snapshots = new SandboxSnapshots(this);
     this.terminal = new SandboxTerminal(this);
     this.events = new SandboxEvents(this);
+    this.metricsResource = new SandboxMetrics(this);
     this.previews = new SandboxPreviews(this);
     this.env = new SandboxEnv(this);
     this.tags = new SandboxTags(this);
     // Egress (security) namespaces — pre-scoped to this sandbox id.
     const sandboxId = data.id as string;
+    this.connectors = new SandboxConnectors(http, sandboxId);
     this.secrets = new SandboxSecrets(http, sandboxId);
     this.network = new SandboxNetwork(http, sandboxId);
     this.audit = new SandboxAudit(http, sandboxId);
@@ -809,6 +1153,50 @@ export class Sandbox {
       await this.http.get<WireEnvelope<SandboxData>>(`/sandboxes/${this.id}`),
     );
     return this;
+  }
+
+  /**
+   * Run an AI coding agent inside this Sandbox.
+   *
+   * Defaults to Claude Code, waits for completion, and runs from `/workspace`.
+   * Pass `{ runner: "codex", env: { CODEX_API_KEY } }` to run Codex.
+   */
+  async run(
+    instruction: string,
+    options: SandboxRunOptions = {},
+  ): Promise<Run> {
+    const runner = options.runner ?? "claude-code";
+
+    return new Runs(this.http).run({
+      ...options,
+      instruction,
+      targetKind: "sandbox",
+      targetId: this.id,
+      runtimeId: this.id,
+      sandboxId: this.id,
+      runner,
+      cwd: options.cwd ?? "/workspace",
+      wait: options.wait ?? true,
+    });
+  }
+
+  /**
+   * Dispatch a prompt into this Sandbox through the Agent Runs API.
+   */
+  async prompt(
+    prompt: string,
+    options: SandboxPromptOptions = {},
+  ): Promise<AgentRun> {
+    return new AgentRuns(this.http).run({
+      ...options,
+      prompt,
+      targetKind: "sandbox",
+      targetId: this.id,
+      sandboxId: this.id,
+      provider: options.provider ?? "claude",
+      cwd: options.cwd ?? "/workspace",
+      wait: options.wait ?? true,
+    });
   }
 
   private async runExec(
@@ -867,6 +1255,40 @@ export class Sandbox {
     );
   }
 
+  async createExport(
+    params: string | string[] | SandboxExportParams,
+  ): Promise<SandboxExport> {
+    const body =
+      typeof params === "string"
+        ? { path: params }
+        : Array.isArray(params)
+          ? { paths: params }
+          : params;
+    const response = unwrap(
+      await this.http.post<WireEnvelope<SandboxExport>>(
+        `/sandboxes/${this.id}/exports`,
+        body,
+      ),
+    );
+    return normalizeExport(response);
+  }
+
+  async downloadExport(
+    paths: string | string[],
+    options: { filename?: string } = {},
+  ): Promise<Uint8Array> {
+    const query = new URLSearchParams();
+    if (Array.isArray(paths)) {
+      for (const path of paths) query.append("paths[]", path);
+    } else {
+      query.set("path", paths);
+    }
+    if (options.filename) query.set("filename", options.filename);
+    return this.http.getBinary(
+      `/sandboxes/${this.id}/exports/download?${query.toString()}`,
+    );
+  }
+
   async readFile(path: string): Promise<string> {
     return new TextDecoder().decode(await this.download(path));
   }
@@ -893,6 +1315,20 @@ export class Sandbox {
   }
 
   async expose(port?: number): Promise<string> {
+    return (await this.exposeInfo(port)).url;
+  }
+
+  async getUrl(port?: number, path = "/"): Promise<string> {
+    const url = new URL((await this.exposeInfo(port)).url);
+    url.pathname = path.startsWith("/") ? path : `/${path}`;
+    return url.toString();
+  }
+
+  async getHost(port?: number): Promise<string> {
+    return new URL((await this.exposeInfo(port)).url).host;
+  }
+
+  async exposeInfo(port?: number): Promise<PreviewUrlInfo> {
     this.assertRunning("expose");
     const response = unwrap(
       await this.http.post<WireEnvelope<Record<string, unknown>>>(
@@ -900,7 +1336,7 @@ export class Sandbox {
         port === undefined ? {} : { port },
       ),
     );
-    return String(response.url ?? response.preview_url ?? "");
+    return previewInfoFromResponse(response);
   }
 
   async startTemplate(
@@ -935,6 +1371,19 @@ export class Sandbox {
     return this.http.stream<Record<string, unknown>>(
       `/sandboxes/${this.id}/logs/stream`,
     );
+  }
+
+  async metrics(window = "1h"): Promise<Record<string, unknown>> {
+    return unwrap(
+      await this.http.get<WireEnvelope<Record<string, unknown>>>(
+        `/sandboxes/${this.id}/metrics`,
+        { window },
+      ),
+    );
+  }
+
+  async getMetrics(window = "1h"): Promise<Record<string, unknown>> {
+    return this.metrics(window);
   }
 
   async createSnapshot(comment?: string): Promise<SandboxSnapshot> {
@@ -973,17 +1422,56 @@ export class Sandbox {
    * Fork (clone) this sandbox into a new sandbox via copy-on-write snapshot.
    * The original sandbox continues running unchanged.
    */
+  async fork(opts?: SandboxForkParams): Promise<Sandbox>;
+  /** @deprecated Use forkLegacy() for private name/metadata fork fields. */
+  async fork(opts: SandboxLegacyForkParams): Promise<Sandbox>;
   async fork(
-    opts: { name?: string; metadata?: Record<string, unknown> } = {},
+    opts: SandboxForkParams | SandboxLegacyForkParams = {},
   ): Promise<Sandbox> {
+    if (isLegacyForkParams(opts)) {
+      return this.forkLegacy(opts);
+    }
     this.assertRunning("fork");
-    const body: Record<string, unknown> = {};
-    if (opts.name !== undefined) body.name = opts.name;
-    if (opts.metadata !== undefined) body.metadata = opts.metadata;
+    const body = stripUndefined({
+      timeout_sec: opts.timeoutSec ?? opts.timeout_sec,
+      template_id: opts.templateId ?? opts.template_id,
+    });
+    const idempotencyKey = opts.idempotencyKey ?? opts.idempotency_key;
     const data = unwrap(
-      await this.http.post<WireEnvelope<SandboxData>>(
+      await this.http.request<WireEnvelope<SandboxData>>(
         `/sandboxes/${this.id}/fork`,
-        body,
+        {
+          method: "POST",
+          body,
+          ...(idempotencyKey
+            ? { headers: { "Idempotency-Key": idempotencyKey } }
+            : {}),
+        },
+      ),
+    );
+    return new Sandbox(this.http, data);
+  }
+
+  /** Fork using private compatibility fields excluded from the public V1 contract. */
+  async forkLegacy(opts: SandboxLegacyForkParams = {}): Promise<Sandbox> {
+    this.assertRunning("fork");
+    const body = stripUndefined({
+      timeout_sec: opts.timeoutSec ?? opts.timeout_sec,
+      template_id: opts.templateId ?? opts.template_id,
+      name: opts.name,
+      metadata: opts.metadata,
+    });
+    const idempotencyKey = opts.idempotencyKey ?? opts.idempotency_key;
+    const data = unwrap(
+      await this.http.request<WireEnvelope<SandboxData>>(
+        `/sandboxes/${this.id}/fork`,
+        {
+          method: "POST",
+          body,
+          ...(idempotencyKey
+            ? { headers: { "Idempotency-Key": idempotencyKey } }
+            : {}),
+        },
       ),
     );
     return new Sandbox(this.http, data);
@@ -998,13 +1486,44 @@ export class Sandbox {
     tags?: string[];
     metadata?: Record<string, unknown>;
     always_on?: boolean;
+    alwaysOn?: boolean;
     timeout_sec?: number;
+    timeoutSec?: number;
     idle_timeout_sec?: number;
+    idleTimeoutSec?: number;
+    persistent?: boolean;
+    snapshotExpirationSec?: number;
+    snapshot_expiration_sec?: number;
+    snapshotExpirationDays?: number;
+    snapshot_expiration_days?: number;
+    keepLastSnapshots?:
+      | number
+      | { count: number; expirationSec?: number; deleteEvicted?: boolean };
+    keep_last_snapshots?:
+      | number
+      | { count: number; expiration_sec?: number; delete_evicted?: boolean };
   }): Promise<Sandbox> {
-    const body: Record<string, unknown> = {};
-    for (const [k, v] of Object.entries(params)) {
-      if (v !== undefined) body[k] = v;
+    const snapshotExpirationSec = snapshotExpirationSeconds(params);
+    const metadata = { ...(params.metadata ?? {}) };
+    if (params.persistent !== undefined)
+      metadata.miosa_persistent = params.persistent;
+    if (snapshotExpirationSec !== undefined) {
+      metadata.snapshot_expiration_sec = snapshotExpirationSec;
     }
+    const keepLastSnapshots =
+      params.keepLastSnapshots ?? params.keep_last_snapshots;
+    if (keepLastSnapshots !== undefined) {
+      metadata.keep_last_snapshots = keepLastSnapshots;
+    }
+    const body = stripUndefined({
+      name: params.name,
+      slug: params.slug,
+      tags: params.tags,
+      metadata: Object.keys(metadata).length > 0 ? metadata : undefined,
+      always_on: params.always_on ?? params.alwaysOn,
+      timeout_sec: params.timeout_sec ?? params.timeoutSec,
+      idle_timeout_sec: params.idle_timeout_sec ?? params.idleTimeoutSec,
+    });
     const data = unwrap(
       await this.http.patch<WireEnvelope<SandboxData>>(
         `/sandboxes/${this.id}`,
@@ -1013,6 +1532,25 @@ export class Sandbox {
     );
     this.data = data;
     return this;
+  }
+
+  async extend(timeoutSec?: number): Promise<Sandbox> {
+    const data = unwrap(
+      await this.http.post<WireEnvelope<SandboxData>>(
+        `/sandboxes/${this.id}/extend`,
+        timeoutSec === undefined ? {} : { timeout_sec: timeoutSec },
+      ),
+    );
+    this.data = { ...this.data, ...data };
+    return this;
+  }
+
+  async usage(): Promise<SandboxUsage> {
+    return unwrap(
+      await this.http.get<WireEnvelope<SandboxUsage>>(
+        `/sandboxes/${this.id}/usage`,
+      ),
+    );
   }
 
   /**
@@ -1059,18 +1597,26 @@ export class Sandbox {
         {},
       ),
     );
-    this.data = data;
+    this.data = { ...this.data, ...data };
     return this;
   }
 
-  async resume(): Promise<Sandbox> {
-    const data = unwrap(
-      await this.http.post<WireEnvelope<SandboxData>>(
-        `/sandboxes/${this.id}/resume`,
-        {},
-      ),
-    );
-    this.data = data;
+  async resume(idempotencyKey?: string): Promise<Sandbox> {
+    const response = idempotencyKey
+      ? await this.http.request<WireEnvelope<SandboxData>>(
+          `/sandboxes/${this.id}/resume`,
+          {
+            method: "POST",
+            body: {},
+            headers: { "Idempotency-Key": idempotencyKey },
+          },
+        )
+      : await this.http.post<WireEnvelope<SandboxData>>(
+          `/sandboxes/${this.id}/resume`,
+          {},
+        );
+    const data = unwrap(response);
+    this.data = { ...this.data, ...data };
     return this;
   }
 
@@ -1092,6 +1638,16 @@ export class Sandbox {
         source_snapshot_path:
           params.sourceSnapshotPath ?? params.source_snapshot_path,
         entrypoint: params.entrypoint,
+        build_command: params.buildCommand ?? params.build_command,
+        run_command: params.runCommand ?? params.run_command,
+        start_command: params.startCommand ?? params.start_command,
+        port: params.port,
+        health_check_path: params.healthCheckPath ?? params.health_check_path,
+        deployment_type: params.deploymentType ?? params.deployment_type,
+        type: params.type,
+        mode: params.mode,
+        database: params.database,
+        resources: params.resources,
         domain: params.domain,
         custom_domain: params.customDomain ?? params.custom_domain,
       }),
@@ -1106,6 +1662,12 @@ export class Sandbox {
         requestOptions,
       ),
     );
+  }
+
+  async deployDocker(
+    params: SandboxDeployParams = {},
+  ): Promise<Record<string, unknown>> {
+    return this.deploy({ ...params, deploymentType: "docker_deploy" });
   }
 
   /** Check readiness of the sandbox (GET /sandboxes/:id/readiness). */
@@ -1173,7 +1735,7 @@ export class Sandbox {
       const headers: Record<string, string> = {
         Authorization: `Bearer ${this.http.apiKey}`,
         Accept: "text/event-stream",
-        "User-Agent": "@miosa/sdk/1.0.0",
+        "User-Agent": SDK_USER_AGENT,
       };
       const response = await fetch(
         `${this.http.baseUrl}/sandboxes/${this.id}/readiness/stream`,
@@ -1244,9 +1806,12 @@ export class Sandbox {
         "SANDBOX_DESTROYED",
       );
     }
+    if (this.data.state === "paused" && this.data.persistent === true) {
+      return;
+    }
     if (this.data.state !== "running") {
       throw new MiosaError(
-        `Cannot ${operation} on sandbox ${this.id}: state is ${this.data.state}, expected running`,
+        `Cannot ${operation} on sandbox ${this.id}: state is ${this.data.state}, expected running or paused persistent`,
         409,
         "SANDBOX_NOT_RUNNING",
       );
@@ -1256,6 +1821,35 @@ export class Sandbox {
 
 export class Sandboxes {
   constructor(private readonly http: HttpClient) {}
+
+  /**
+   * Create a persistent agent workspace.
+   *
+   * This is the preferred entry point for AI builders, coding agents, and
+   * product workspaces. It gives the sandbox a stable name, a longer interactive
+   * timeout, and metadata that makes the workspace easy to identify later. The
+   * agent should create/edit files in `/workspace`, run installs/tests/builds
+   * inside the sandbox, expose previews from the sandbox, and publish from the
+   * sandbox when ready.
+   */
+  async createAgentWorkspace(
+    params: SandboxGetOrCreateParams,
+  ): Promise<Sandbox> {
+    const metadata = {
+      ...(params.metadata ?? {}),
+      miosa_workspace_kind: "agent_workspace",
+    };
+    return this.getOrCreate({
+      persistent: true,
+      timeoutSec: AGENT_WORKSPACE_TIMEOUT_SEC,
+      idleTimeoutSec: AGENT_WORKSPACE_IDLE_TIMEOUT_SEC,
+      snapshotExpirationDays: AGENT_WORKSPACE_SNAPSHOT_EXPIRATION_DAYS,
+      keepLastSnapshots: AGENT_WORKSPACE_KEEP_LAST_SNAPSHOTS,
+      waitUntilReady: true,
+      ...params,
+      metadata,
+    });
+  }
 
   async create(params: SandboxCreateParams = {}): Promise<Sandbox> {
     const idempotencyKey = params.idempotencyKey ?? params.idempotency_key;
@@ -1300,8 +1894,89 @@ export class Sandboxes {
     return new Sandbox(this.http, data);
   }
 
+  async extend(id: SandboxId | string, timeoutSec?: number): Promise<Sandbox> {
+    return (await this.get(id)).extend(timeoutSec);
+  }
+
+  async usage(id: SandboxId | string): Promise<SandboxUsage> {
+    return (await this.get(id)).usage();
+  }
+
+  async pause(id: SandboxId | string): Promise<Sandbox> {
+    return (await this.get(id)).pause();
+  }
+
+  async resume(
+    id: SandboxId | string,
+    idempotencyKey?: string,
+  ): Promise<Sandbox> {
+    return (await this.get(id)).resume(idempotencyKey);
+  }
+
+  async fork(
+    id: SandboxId | string,
+    params?: SandboxForkParams,
+  ): Promise<Sandbox>;
+  /** @deprecated Use forkLegacy() for private name/metadata fork fields. */
+  async fork(
+    id: SandboxId | string,
+    params: SandboxLegacyForkParams,
+  ): Promise<Sandbox>;
+  async fork(
+    id: SandboxId | string,
+    params: SandboxForkParams | SandboxLegacyForkParams = {},
+  ): Promise<Sandbox> {
+    const sandbox = await this.get(id);
+    return isLegacyForkParams(params)
+      ? sandbox.forkLegacy(params)
+      : sandbox.fork(params);
+  }
+
+  async forkLegacy(
+    id: SandboxId | string,
+    params: SandboxLegacyForkParams = {},
+  ): Promise<Sandbox> {
+    return (await this.get(id)).forkLegacy(params);
+  }
+
   connect(id: SandboxId | string): Promise<Sandbox> {
     return this.get(id);
+  }
+
+  async getByName(name: string): Promise<Sandbox> {
+    const data = unwrap(
+      await this.http.get<WireEnvelope<SandboxData>>(
+        `/sandboxes/by-name/${encodeURIComponent(name)}`,
+      ),
+    );
+    return new Sandbox(this.http, data);
+  }
+
+  /**
+   * Idempotently obtain a persistent sandbox by stable name.
+   *
+   * If the sandbox exists, it is returned. If it is paused and `resume !== false`,
+   * it is resumed first. If it does not exist, it is created with the supplied
+   * params. Destroyed sandboxes are permanent and are not resumed by this helper.
+   */
+  async getOrCreate(params: SandboxGetOrCreateParams): Promise<Sandbox> {
+    let sandbox: Sandbox;
+    try {
+      sandbox = await this.getByName(params.name);
+    } catch (error) {
+      if (!(error instanceof NotFoundError)) throw error;
+      sandbox = await this.create(params);
+    }
+
+    if (sandbox.state === "paused" && params.resume !== false) {
+      await sandbox.resume();
+    }
+
+    if (params.waitUntilReady === true) {
+      await sandbox.waitUntilReady({ timeout: params.waitTimeoutSec ?? 60 });
+    }
+
+    return sandbox;
   }
 
   async delete(id: SandboxId | string): Promise<void> {
@@ -1329,11 +2004,13 @@ export class Sandboxes {
   async validateBuildSpec(
     buildSpec: SandboxBuildSpec,
   ): Promise<SandboxBuildSpecValidation> {
-    return this.http.post<SandboxBuildSpecValidation>(
-      "/sandbox-templates/validate",
-      {
-        build_spec: buildSpec,
-      },
+    return unwrap(
+      await this.http.post<WireEnvelope<SandboxBuildSpecValidation>>(
+        "/sandbox-templates/validate",
+        {
+          build_spec: buildSpec,
+        },
+      ),
     );
   }
 
@@ -1399,4 +2076,43 @@ function toBase64(bytes: Uint8Array): string {
     binary += String.fromCharCode(bytes[index]!);
   }
   return btoa(binary);
+}
+
+function previewInfoFromResponse(
+  response: Record<string, unknown>,
+): PreviewUrlInfo {
+  const url = String(response.url ?? response.preview_url ?? "");
+  const embeddedInfo =
+    response.url_info && typeof response.url_info === "object"
+      ? (response.url_info as Record<string, unknown>)
+      : {};
+
+  return {
+    ...embeddedInfo,
+    url: String(embeddedInfo.url ?? url),
+    class: String(
+      response.class ??
+        response.url_class ??
+        embeddedInfo.class ??
+        embeddedInfo.url_class ??
+        "temporary_preview",
+    ) as PreviewUrlClass,
+    url_class: String(
+      response.url_class ??
+        response.class ??
+        embeddedInfo.url_class ??
+        embeddedInfo.class ??
+        "temporary_preview",
+    ) as PreviewUrlClass,
+    stable_for_embedding: Boolean(
+      response.stable_for_embedding ??
+      embeddedInfo.stable_for_embedding ??
+      false,
+    ),
+    recommended_next_action: String(
+      response.recommended_next_action ??
+        embeddedInfo.recommended_next_action ??
+        "create_alias_or_publish",
+    ) as PreviewUrlAction,
+  };
 }

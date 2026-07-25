@@ -13,6 +13,8 @@
 import { randomUUID } from "node:crypto";
 
 import type { HttpClient } from "../http.js";
+import { DeploymentConnectors } from "./connectors.js";
+import type { DockerDeployHostData } from "./docker-deploy.js";
 
 // ── Branded IDs ─────────────────────────────────────────────────────────────
 
@@ -49,6 +51,8 @@ export type DeploymentVersionState =
   | "archived";
 
 export type DeploymentSourceType = "repo" | "sandbox" | "upload";
+
+export type DeploymentProduct = "miosa_deploy" | "docker_deploy";
 
 export type DeploymentServiceType =
   | "static_web"
@@ -88,6 +92,8 @@ export interface DeploymentData {
   id: DeploymentId;
   tenant_id: string;
   owner_id?: string;
+  workspace_id?: string | null;
+  project_id?: string | null;
   name: string;
   slug: string;
   /**
@@ -102,16 +108,40 @@ export interface DeploymentData {
   runtime_image?: string | null;
   current_build_id?: string | null;
   active_version_id?: string | null;
+  active_release_id?: string | null;
+  running_artifact_sha256?: string | null;
   source_type?: DeploymentSourceType;
   state: DeploymentState;
   auto_deploy?: boolean;
   custom_domain_id?: string | null;
   linked_database_id?: string | null;
+  deployment_product?: DeploymentProduct | string | null;
+  docker_deploy_host_id?: string | null;
+  docker_deploy_app?: {
+    id?: string | null;
+    deployment_id?: string | null;
+    deployment_version_id?: string | null;
+    docker_deploy_host_id?: string | null;
+    name?: string | null;
+    app_id?: string | null;
+    container_id?: string | null;
+    status?: string | null;
+    runtime_ip?: string | null;
+    runtime_port?: number | string | null;
+    public_url?: string | null;
+    last_health_status?: string | null;
+    last_error?: string | null;
+    last_seen_at?: string | null;
+    deployed_at?: string | null;
+    stopped_at?: string | null;
+  } | null;
   metadata?: Record<string, unknown>;
   external_workspace_id?: string | null;
   external_user_id?: string | null;
   external_project_id?: string | null;
   public_url?: string | null;
+  /** Backend-computed default hostname. Prefer public_url as the canonical URL. */
+  auto_subdomain?: string | null;
   created_at?: string;
   updated_at?: string;
 }
@@ -119,7 +149,7 @@ export interface DeploymentData {
 export type DeploymentDatabaseRequest =
   | boolean
   | {
-      engine?: "postgresql" | "mysql" | "redis";
+      engine?: "postgresql" | "mysql" | "redis" | "qdrant";
       size?: "xs" | "small" | "medium" | "large";
       storage_mb?: number;
       region?: string;
@@ -129,6 +159,8 @@ export interface DeploymentVersionData {
   id: DeploymentVersionId;
   deployment_id: DeploymentId;
   tenant_id: string;
+  workspace_id?: string | null;
+  project_id?: string | null;
   created_by?: string | null;
   source_sandbox_id?: string | null;
   build_id?: string | null;
@@ -153,6 +185,17 @@ export interface DeploymentVersionData {
   updated_at?: string;
 }
 
+export interface MigrationBackupData {
+  id: string;
+  database_id: string;
+  state: string;
+  backup_type?: string;
+  size_bytes?: number | null;
+  started_at?: string | null;
+  completed_at?: string | null;
+  created_at?: string | null;
+}
+
 export interface DeploymentReleaseData {
   id: DeploymentReleaseId;
   deployment_id?: DeploymentId;
@@ -160,6 +203,8 @@ export interface DeploymentReleaseData {
   deployment_version_id: DeploymentVersionId;
   service_id?: DeploymentServiceId | null;
   tenant_id: string;
+  workspace_id?: string | null;
+  project_id?: string | null;
   external_workspace_id?: string | null;
   external_user_id?: string | null;
   external_project_id?: string | null;
@@ -279,6 +324,70 @@ export interface DeploymentCreateParams extends ExternalAttribution {
   database?: DeploymentDatabaseRequest;
   metadata?: Record<string, unknown>;
   idempotencyKey?: string;
+}
+
+export interface DockerDeployCreateParams extends DeploymentCreateParams {}
+
+export interface DockerDeployDoctorCheck {
+  name: string;
+  ok: boolean;
+  message: string;
+  details?: Record<string, unknown>;
+}
+
+export interface DockerDeployDoctorProbe {
+  url: string;
+  ok: boolean;
+  status?: number;
+  error?: string;
+}
+
+export interface DockerDeployDoctorResult {
+  ok: boolean;
+  deployment: DeploymentData;
+  host?: DockerDeployHostData;
+  checks: DockerDeployDoctorCheck[];
+  probe?: DockerDeployDoctorProbe;
+}
+
+export interface DeploymentProofCheck {
+  id: string;
+  ok: boolean;
+  message: string;
+  details?: Record<string, unknown>;
+  recovery?: string[];
+}
+
+export interface DeploymentProofProbe {
+  url?: string;
+  ok: boolean;
+  status?: number;
+  error?: string;
+}
+
+export interface DeploymentProofResult {
+  ok: boolean;
+  deployment: DeploymentData;
+  deployment_product: string | null;
+  public_url: string | null;
+  checks: DeploymentProofCheck[];
+  probe?: DeploymentProofProbe;
+  next_actions: string[];
+}
+
+export interface DeploymentProofParams {
+  probePath?: string;
+  probe_path?: string;
+  timeoutMs?: number;
+  timeout_ms?: number;
+  probe?: boolean;
+}
+
+export interface DockerDeployDoctorParams {
+  probePath?: string;
+  probe_path?: string;
+  timeoutMs?: number;
+  timeout_ms?: number;
 }
 
 export interface DeploymentUpdateParams {
@@ -421,6 +530,106 @@ function stripUndefined(
   );
 }
 
+function dockerDeployMetadata(
+  metadata: Record<string, unknown> | undefined,
+): Record<string, unknown> {
+  return {
+    ...(metadata ?? {}),
+    deployment_product: "docker_deploy",
+  };
+}
+
+function dockerDeployProduct(deployment: DeploymentData): unknown {
+  return deployment.deployment_product ?? deployment.metadata?.deployment_product;
+}
+
+function dockerDeployHostId(deployment: DeploymentData): string | null {
+  const metadataHost = deployment.metadata?.docker_deploy_host_id;
+  const appHost = dockerDeployApp(deployment)?.docker_deploy_host_id;
+  return (
+    deployment.docker_deploy_host_id ??
+    (typeof metadataHost === "string" ? metadataHost : null) ??
+    (typeof appHost === "string" ? appHost : null)
+  );
+}
+
+function dockerDeployApp(
+  deployment: DeploymentData,
+): Record<string, unknown> | null {
+  if (
+    deployment.docker_deploy_app &&
+    typeof deployment.docker_deploy_app === "object" &&
+    !Array.isArray(deployment.docker_deploy_app)
+  ) {
+    return deployment.docker_deploy_app;
+  }
+  const app = deployment.metadata?.docker_deploy;
+  if (!app || typeof app !== "object" || Array.isArray(app)) return null;
+  return app as Record<string, unknown>;
+}
+
+function dockerDeployAppPort(app: Record<string, unknown> | null): number | null {
+  const runtimePort = app?.runtime_port;
+  if (typeof runtimePort === "number" && Number.isFinite(runtimePort)) return runtimePort;
+  if (typeof runtimePort === "string" && /^\d+$/.test(runtimePort)) return Number(runtimePort);
+
+  const url = app?.url;
+  if (typeof url !== "string") return null;
+  try {
+    const parsed = new URL(url);
+    const port = Number.parseInt(parsed.port, 10);
+    return Number.isInteger(port) ? port : null;
+  } catch {
+    return null;
+  }
+}
+
+function addDoctorCheck(
+  checks: DockerDeployDoctorCheck[],
+  name: string,
+  ok: boolean,
+  message: string,
+  details?: Record<string, unknown>,
+): void {
+  checks.push({ name, ok, message, ...(details ? { details } : {}) });
+}
+
+function addProofCheck(
+  checks: DeploymentProofCheck[],
+  id: string,
+  ok: boolean,
+  message: string,
+  details?: Record<string, unknown>,
+  recovery?: string[],
+): void {
+  checks.push({
+    id,
+    ok,
+    message,
+    ...(details ? { details } : {}),
+    ...(recovery ? { recovery } : {}),
+  });
+}
+
+function deploymentPublicUrl(deployment: DeploymentData): string | null {
+  const app = dockerDeployApp(deployment);
+  const appUrl = app?.public_url;
+  if (typeof appUrl === "string" && appUrl) return appUrl;
+  return deployment.public_url ?? null;
+}
+
+function hostHealthy(host: DockerDeployHostData | undefined): boolean {
+  return Boolean(
+    host && host.status === "active" && host.appliance_status === "healthy",
+  );
+}
+
+function probeUrl(publicUrl: string, probePath: string): string {
+  const url = new URL(publicUrl);
+  url.pathname = probePath.startsWith("/") ? probePath : `/${probePath}`;
+  return url.toString();
+}
+
 // ── Sub-resources ──────────────────────────────────────────────────────────
 
 export class DeploymentVersions {
@@ -465,6 +674,17 @@ export class DeploymentVersions {
     );
     return unwrap(data) as DeploymentData;
   }
+
+  async prepareMigrationBackup(versionId: string): Promise<{
+    backup: MigrationBackupData;
+    version: DeploymentVersionData;
+  }> {
+    const data = await this.http.request<unknown>(
+      `/deployments/${this.deploymentId}/versions/${versionId}/migration-backup`,
+      { method: "POST", body: {} },
+    );
+    return unwrap(data) as { backup: MigrationBackupData; version: DeploymentVersionData };
+  }
 }
 
 export class DeploymentReleases {
@@ -485,6 +705,23 @@ export class DeploymentReleases {
       `/deployments/${this.deploymentId}/releases/${releaseId}`,
     );
     return unwrap(data) as DeploymentReleaseData;
+  }
+
+  async promote(
+    releaseId: string,
+    idempotencyKey?: string,
+  ): Promise<DeploymentData> {
+    const key =
+      idempotencyKey ?? `promote:${this.deploymentId}:${releaseId}`;
+    const data = await this.http.request<unknown>(
+      `/deployments/${this.deploymentId}/releases/${releaseId}/promote`,
+      {
+        method: "POST",
+        body: {},
+        headers: { "Idempotency-Key": key },
+      },
+    );
+    return unwrap(data) as DeploymentData;
   }
 }
 
@@ -625,6 +862,378 @@ export class Deployments {
       headers: { "Idempotency-Key": idempotencyKey(params.idempotencyKey) },
     });
     return unwrap(data) as DeploymentData;
+  }
+
+  /**
+   * Create a deployment that runs on the workspace's dedicated App Engine
+   * runtime. It uses the same /deployments API as MIOSA Deploy, but marks the
+   * deployment so the control plane attaches it to the workspace Docker host.
+   */
+  async createDockerDeploy(
+    params: DockerDeployCreateParams,
+  ): Promise<DeploymentData> {
+    return this.create({
+      ...params,
+      metadata: dockerDeployMetadata(params.metadata),
+    });
+  }
+
+  /**
+   * Verify a App Engine deployment before telling a user or agent it is
+   * live. Checks product markers, appliance host health, route metadata, and
+   * optionally probes the public URL.
+   */
+  async doctorDockerDeploy(
+    deploymentId: string,
+    params: DockerDeployDoctorParams = {},
+  ): Promise<DockerDeployDoctorResult> {
+    const checks: DockerDeployDoctorCheck[] = [];
+    const deployment = await this.get(deploymentId);
+    const metadata = deployment.metadata ?? {};
+    const product = dockerDeployProduct(deployment);
+    const hostId = dockerDeployHostId(deployment);
+
+    addDoctorCheck(
+      checks,
+      "deployment_product",
+      product === "docker_deploy",
+      product === "docker_deploy"
+        ? "Deployment is marked for App Engine."
+        : `Expected deployment_product=docker_deploy, got ${String(product ?? "missing")}.`,
+      { deployment_product: product ?? null },
+    );
+
+    addDoctorCheck(
+      checks,
+      "docker_deploy_host_id",
+      Boolean(hostId),
+      hostId
+        ? "Deployment has a App Engine host id."
+        : "Deployment has no docker_deploy_host_id.",
+      { docker_deploy_host_id: hostId },
+    );
+
+    let host: DockerDeployHostData | undefined;
+    if (hostId) {
+      try {
+        const rawHost = await this.http.get<unknown>(
+          `/docker-deploy/hosts/${hostId}`,
+        );
+        host = unwrap<DockerDeployHostData>(
+          rawHost as DockerDeployHostData | { data?: DockerDeployHostData },
+        );
+        addDoctorCheck(
+          checks,
+          "docker_deploy_host_health",
+          hostHealthy(host),
+          hostHealthy(host)
+            ? "App Engine host is active and healthy."
+            : `App Engine host status=${host.status} appliance=${host.appliance_status}.`,
+          {
+            status: host.status,
+            appliance_status: host.appliance_status,
+          },
+        );
+      } catch (error) {
+        addDoctorCheck(
+          checks,
+          "docker_deploy_host_health",
+          false,
+          error instanceof Error ? error.message : String(error),
+        );
+      }
+    }
+
+    const app = dockerDeployApp(deployment);
+    const appPort = dockerDeployAppPort(app);
+    const appRunning = app?.status === "running" && appPort !== null;
+    addDoctorCheck(
+      checks,
+      "docker_deploy_app",
+      appRunning,
+      appRunning
+        ? "App Engine app metadata points at a running container."
+        : "Deployment is missing running App Engine app metadata.",
+      app
+        ? {
+            app_id: app.app_id,
+            container_id: app.container_id,
+            status: app.status,
+            url: app.url,
+            expected_port: appPort,
+          }
+        : undefined,
+    );
+
+    const runtime = metadata.runtime;
+    const runtimeCandidate =
+      typeof runtime === "object" && runtime !== null
+        ? (runtime as Record<string, unknown>)
+        : undefined;
+    const appRuntimeIp = app?.runtime_ip;
+    const appRuntimePort = app?.runtime_port;
+    const appRuntimeCandidate =
+      typeof appRuntimeIp === "string" &&
+      (typeof appRuntimePort === "number" || typeof appRuntimePort === "string")
+        ? { ip: appRuntimeIp, port: Number(appRuntimePort) }
+        : undefined;
+    const effectiveRuntime = appRuntimeCandidate ?? runtimeCandidate;
+    const hasRuntimeRoute =
+      typeof effectiveRuntime?.ip === "string" &&
+      typeof effectiveRuntime.port === "number" &&
+      Number.isFinite(effectiveRuntime.port);
+    const runtimeRecord = hasRuntimeRoute
+      ? effectiveRuntime
+      : undefined;
+    const routeMatchesContainerPort =
+      hasRuntimeRoute && (appPort === null || runtimeRecord?.port === appPort);
+    addDoctorCheck(
+      checks,
+      "runtime_route",
+      hasRuntimeRoute && routeMatchesContainerPort,
+      hasRuntimeRoute && routeMatchesContainerPort
+        ? "Deployment route points at the Docker container host port."
+        : hasRuntimeRoute && appPort !== null
+          ? `Deployment route port ${String(runtimeRecord?.port)} does not match Docker container host port ${appPort}.`
+          : "Deployment is missing appliance runtime route metadata.",
+      runtimeRecord
+        ? {
+            ...runtimeRecord,
+            expected_port: appPort,
+            docker_deploy_url: app?.url,
+          }
+        : undefined,
+    );
+
+    let probe: DockerDeployDoctorProbe | undefined;
+    const publicUrl = deploymentPublicUrl(deployment);
+    const path = params.probePath ?? params.probe_path ?? "/";
+    if (publicUrl && typeof fetch === "function") {
+      const url = probeUrl(publicUrl, path);
+      const controller = new AbortController();
+      const timeout = setTimeout(
+        () => controller.abort(),
+        params.timeoutMs ?? params.timeout_ms ?? 10_000,
+      );
+      try {
+        const response = await fetch(url, {
+          method: "GET",
+          signal: controller.signal,
+        });
+        probe = { url, ok: response.ok, status: response.status };
+        addDoctorCheck(
+          checks,
+          "public_url_probe",
+          response.ok,
+          `Public URL returned HTTP ${response.status}.`,
+          { url, status: response.status },
+        );
+      } catch (error) {
+        probe = {
+          url,
+          ok: false,
+          error: error instanceof Error ? error.message : String(error),
+        };
+        addDoctorCheck(
+          checks,
+          "public_url_probe",
+          false,
+          probe.error ?? "Public URL probe failed.",
+          { url },
+        );
+      } finally {
+        clearTimeout(timeout);
+      }
+    }
+
+    return {
+      ok: checks.every((check) => check.ok),
+      deployment,
+      ...(host ? { host } : {}),
+      checks,
+      ...(probe ? { probe } : {}),
+    };
+  }
+
+  async prove(
+    deploymentId: string,
+    params: DeploymentProofParams = {},
+  ): Promise<DeploymentProofResult> {
+    const deployment = await this.get(deploymentId);
+    const product = dockerDeployProduct(deployment);
+    const checks: DeploymentProofCheck[] = [];
+    const publicUrl = deploymentPublicUrl(deployment);
+
+    addProofCheck(
+      checks,
+      "deployment_row",
+      true,
+      `Deployment ${deployment.id} exists with state=${deployment.state}.`,
+      { state: deployment.state },
+    );
+
+    addProofCheck(
+      checks,
+      "deployment_running",
+      deployment.state === "running",
+      deployment.state === "running"
+        ? "Deployment is marked running."
+        : `Deployment state is ${deployment.state}, expected running.`,
+      { state: deployment.state },
+      ["Inspect deployment logs.", "Redeploy the deployment."],
+    );
+
+    addProofCheck(
+      checks,
+      "public_url_present",
+      Boolean(publicUrl),
+      publicUrl ? `Public URL is ${publicUrl}.` : "Deployment has no public URL.",
+      { public_url: publicUrl },
+    );
+
+    if (product === "docker_deploy") {
+      const app = dockerDeployApp(deployment);
+      const appPort = dockerDeployAppPort(app);
+      const hostId = dockerDeployHostId(deployment);
+      const runtimeIp =
+        typeof app?.runtime_ip === "string"
+          ? app.runtime_ip
+          : typeof deployment.metadata?.runtime === "object" &&
+              deployment.metadata.runtime !== null
+            ? (deployment.metadata.runtime as Record<string, unknown>).ip
+            : null;
+
+      addProofCheck(
+        checks,
+        "docker_deploy_host_link",
+        Boolean(hostId),
+        hostId
+          ? `Deployment links App Engine host ${hostId}.`
+          : "Deployment has no App Engine host id.",
+        { docker_deploy_host_id: hostId },
+        ["Ensure the workspace App Engine appliance."],
+      );
+
+      if (hostId) {
+        try {
+          const rawHost = await this.http.get<unknown>(
+            `/docker-deploy/hosts/${hostId}`,
+          );
+          const host = unwrap<DockerDeployHostData>(
+            rawHost as DockerDeployHostData | { data?: DockerDeployHostData },
+          );
+          addProofCheck(
+            checks,
+            "docker_deploy_host_ready",
+            hostHealthy(host),
+            `Host status=${host.status}, appliance=${host.appliance_status}.`,
+            {
+              status: host.status,
+              appliance_status: host.appliance_status,
+            },
+            ["Check App Engine host health."],
+          );
+        } catch (error) {
+          addProofCheck(
+            checks,
+            "docker_deploy_host_ready",
+            false,
+            error instanceof Error ? error.message : String(error),
+            { docker_deploy_host_id: hostId },
+          );
+        }
+      }
+
+      addProofCheck(
+        checks,
+        "docker_deploy_app_row",
+        Boolean(app),
+        app
+          ? `App Engine app status=${String(app.status ?? "unknown")}.`
+          : "App Engine app row is missing.",
+        app
+          ? {
+              app_id: app.app_id,
+              container_id: app.container_id,
+              status: app.status,
+            }
+          : undefined,
+        ["Publish through App Engine again."],
+      );
+
+      addProofCheck(
+        checks,
+        "docker_deploy_container_route",
+        Boolean(
+          app &&
+            app.status === "running" &&
+            typeof app.container_id === "string" &&
+            typeof runtimeIp === "string" &&
+            appPort !== null,
+        ),
+        app
+          ? `Container=${String(app.container_id ?? "missing")}, route=${String(runtimeIp ?? "missing")}:${String(appPort ?? "missing")}.`
+          : "Cannot verify container route without App Engine app row.",
+        {
+          container_id: app?.container_id ?? null,
+          runtime_ip: runtimeIp ?? null,
+          runtime_port: appPort,
+        },
+        ["Run App Engine doctor.", "Check appliance container health."],
+      );
+    }
+
+    let probe: DeploymentProofProbe | undefined;
+    const shouldProbe = params.probe ?? true;
+    if (shouldProbe && publicUrl && typeof fetch === "function") {
+      const url = probeUrl(publicUrl, params.probePath ?? params.probe_path ?? "/");
+      const controller = new AbortController();
+      const timeout = setTimeout(
+        () => controller.abort(),
+        params.timeoutMs ?? params.timeout_ms ?? 10_000,
+      );
+      try {
+        const response = await fetch(url, {
+          method: "GET",
+          signal: controller.signal,
+        });
+        probe = { url, ok: response.ok, status: response.status };
+      } catch (error) {
+        probe = {
+          url,
+          ok: false,
+          error: error instanceof Error ? error.message : String(error),
+        };
+      } finally {
+        clearTimeout(timeout);
+      }
+
+      addProofCheck(
+        checks,
+        "public_url_probe",
+        probe.ok,
+        probe.ok
+          ? `Public URL returned HTTP ${probe.status}.`
+          : `Public URL probe failed: ${probe.error ?? `HTTP ${probe.status}`}.`,
+        { ...probe },
+        ["Check DNS/custom domain routing.", "Check app logs and container health."],
+      );
+    }
+
+    const nextActions = checks
+      .filter((check) => !check.ok)
+      .flatMap((check) => check.recovery ?? [])
+      .filter((action, index, all) => all.indexOf(action) === index);
+
+    return {
+      ok: checks.every((check) => check.ok),
+      deployment,
+      deployment_product: typeof product === "string" ? product : null,
+      public_url: publicUrl,
+      checks,
+      ...(probe ? { probe } : {}),
+      next_actions: nextActions,
+    };
   }
 
   async update(
@@ -773,5 +1382,9 @@ export class Deployments {
 
   domains(deploymentId: string): DeploymentDomains {
     return new DeploymentDomains(this.http, deploymentId);
+  }
+
+  connectors(deploymentId: string): DeploymentConnectors {
+    return new DeploymentConnectors(this.http, deploymentId);
   }
 }

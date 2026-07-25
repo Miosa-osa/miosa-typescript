@@ -43,6 +43,28 @@ export interface VolumeCreateParams {
   [key: string]: unknown;
 }
 
+export interface VolumeAttachmentData {
+  id: string;
+  volume_id: string;
+  computer_id: string;
+  mount_path: string;
+  read_only?: boolean;
+  state?: string;
+  created_at?: string;
+  updated_at?: string;
+  [key: string]: unknown;
+}
+
+export interface VolumeAttachParams {
+  volumeId?: string;
+  volume_id?: string;
+  mountPath?: string;
+  mount_path?: string;
+  readOnly?: boolean;
+  read_only?: boolean;
+  [key: string]: unknown;
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function unwrap<T>(payload: unknown): T {
@@ -113,5 +135,44 @@ export class Volumes {
 
   async delete(volumeId: string): Promise<void> {
     await this.http.delete<unknown>(`/volumes/${volumeId}`);
+  }
+
+  async listAttachments(computerId: string): Promise<VolumeAttachmentData[]> {
+    const data = await this.http.get<unknown>(`/computers/${computerId}/volumes`);
+    return listItems<VolumeAttachmentData>(data, [
+      "data",
+      "attachments",
+      "volumes",
+      "items",
+    ]);
+  }
+
+  async attach(
+    computerId: string,
+    params: VolumeAttachParams,
+  ): Promise<VolumeAttachmentData> {
+    const volumeId = params.volumeId ?? params.volume_id;
+    const mountPath = params.mountPath ?? params.mount_path;
+    const readOnly = params.readOnly ?? params.read_only;
+    const body = stripUndefined({
+      ...params,
+      volumeId: undefined,
+      mountPath: undefined,
+      readOnly: undefined,
+      volume_id: volumeId,
+      mount_path: mountPath,
+      read_only: readOnly,
+    });
+    const data = await this.http.post<unknown>(
+      `/computers/${computerId}/volumes`,
+      body,
+    );
+    return unwrap<VolumeAttachmentData>(data);
+  }
+
+  async detach(computerId: string, attachmentId: string): Promise<void> {
+    await this.http.delete<unknown>(
+      `/computers/${computerId}/volumes/${attachmentId}`,
+    );
   }
 }

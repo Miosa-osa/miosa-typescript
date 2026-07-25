@@ -5,6 +5,8 @@ import type {
   ComputerId,
   ComputerListParams,
   ComputerUpdateParams,
+  ComputerViewerPasswordRotation,
+  ComputerViewerPasswordStatus,
 } from "../types.js";
 import { Computer } from "./computer.js";
 
@@ -20,10 +22,25 @@ export class Computers {
    * `computer.start()` once it reaches `stopped` to boot it.
    */
   async create(params: ComputerCreateParams): Promise<Computer> {
+    const {
+      agentRuntimeProfileId,
+      agentProfileId,
+      skipAgentRuntimeProfile,
+      skipRuntimeProfile,
+      ...body
+    } = params;
+
     const data = await this.http.post<ComputerData>("/computers", {
       template_type: "miosa-desktop",
-      size: "small",
-      ...params,
+      ...body,
+      size: normalizeComputerSize(body.size ?? "small"),
+      agent_runtime_profile_id:
+        agentRuntimeProfileId ??
+        params.agent_runtime_profile_id ??
+        agentProfileId ??
+        params.agent_profile_id,
+      skip_agent_runtime_profile:
+        skipAgentRuntimeProfile ?? skipRuntimeProfile ?? params.skip_agent_runtime_profile,
     });
     return new Computer(this.http, data);
   }
@@ -72,4 +89,35 @@ export class Computers {
   async delete(id: ComputerId | string): Promise<void> {
     return this.http.delete<void>(`/computers/${id}`);
   }
+
+  /**
+   * Return whether the external/raw desktop viewer password is set.
+   *
+   * Authenticated MIOSA platform users should use the platform desktop entry
+   * URL and do not need this password. This is only for raw external viewer
+   * links such as `*.computer.miosa.ai/desktop/index.html`.
+   */
+  async viewerPassword(
+    id: ComputerId | string,
+  ): Promise<ComputerViewerPasswordStatus> {
+    return this.http.get<ComputerViewerPasswordStatus>(
+      `/computers/${id}/viewer-password`,
+    );
+  }
+
+  /**
+   * Rotate the external/raw desktop viewer password and return the plaintext
+   * one time. Store it if you need to share the raw viewer URL.
+   */
+  async rotateViewerPassword(
+    id: ComputerId | string,
+  ): Promise<ComputerViewerPasswordRotation> {
+    return this.http.post<ComputerViewerPasswordRotation>(
+      `/computers/${id}/viewer-password/rotate`,
+    );
+  }
+}
+
+function normalizeComputerSize(size: ComputerCreateParams["size"]) {
+  return size === "xlarge" ? "xl" : size;
 }
