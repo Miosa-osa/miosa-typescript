@@ -2,7 +2,7 @@
  * Webhooks resource — tenant outgoing event delivery.
  */
 
-import { randomUUID } from "node:crypto";
+import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 
 import type { HttpClient } from "../http.js";
 
@@ -101,9 +101,61 @@ function idempotencyKey(key?: string): string {
   return key ?? randomUUID();
 }
 
+function bodyBuffer(body: Buffer | Uint8Array | string): Buffer {
+  if (Buffer.isBuffer(body)) return body;
+  if (typeof body === "string") return Buffer.from(body, "utf8");
+  return Buffer.from(body);
+}
+
+/**
+ * Verify the `Miosa-Signature` webhook header.
+ *
+ * Header format: `t=<unix_seconds>,v1=<hex_hmac>`.
+ * Signed payload: `<timestamp>.<raw_body>`.
+ */
+export function verifySignature(
+  body: Buffer | Uint8Array | string,
+  header: string,
+  secret: string,
+  toleranceSec = 300,
+): boolean {
+  const parts = Object.fromEntries(
+    header
+      .split(",")
+      .map((chunk) => chunk.split("=", 2))
+      .filter(([key, value]) => key && value),
+  );
+  const timestamp = parts.t;
+  const received = parts.v1;
+  if (!timestamp || !received || !secret) return false;
+
+  const unixSeconds = Number(timestamp);
+  if (!Number.isFinite(unixSeconds)) return false;
+
+  const ageSec = Math.abs(Date.now() / 1000 - unixSeconds);
+  if (ageSec > toleranceSec) {
+    throw new Error("webhook timestamp too old");
+  }
+
+  const rawBody = bodyBuffer(body);
+  const signed = Buffer.concat([Buffer.from(`${timestamp}.`), rawBody]);
+  const expected = createHmac("sha256", secret).update(signed).digest("hex");
+
+  try {
+    return timingSafeEqual(
+      Buffer.from(expected, "utf8"),
+      Buffer.from(received, "utf8"),
+    );
+  } catch {
+    return false;
+  }
+}
+
 // ── Main resource ─────────────────────────────────────────────────────────────
 
 export class Webhooks {
+  static verifySignature = verifySignature;
+
   constructor(private readonly http: HttpClient) {}
 
   async list(params: WebhookListParams = {}): Promise<WebhookData[]> {

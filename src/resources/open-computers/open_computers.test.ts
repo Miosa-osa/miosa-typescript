@@ -277,6 +277,44 @@ describe("OpenComputers.agents", () => {
     expect(result.id).toBe("sess_1");
   });
 
+  it("dispatch() normalizes the current backend session_id response shape", async () => {
+    mockPost.mockResolvedValue({
+      session_id: "sess_2",
+      host_id: "host_abc",
+      task: "run tests",
+      status: "running",
+      agent_runtime_profile_id: "prof_123",
+      runtime_context: {
+        agent_runtime_profile: { id: "prof_123", runtime: "claude-code" },
+      },
+    });
+    const oc = new OpenComputers(makeHttp());
+    const result = await oc.agents.dispatch("host_abc", {
+      task: "run tests",
+      agent_runtime_profile_id: "prof_123",
+    });
+
+    expect(result.id).toBe("sess_2");
+    expect(result.agent_runtime_profile_id).toBe("prof_123");
+  });
+
+  it("list() normalizes the current backend sessions response shape", async () => {
+    mockGet.mockResolvedValue({
+      sessions: [
+        {
+          id: "sess_3",
+          host_id: "host_abc",
+          task: "run tests",
+          status: "running",
+        },
+      ],
+    });
+    const oc = new OpenComputers(makeHttp());
+    const result = await oc.agents.list("host_abc");
+
+    expect(result.data?.[0]?.id).toBe("sess_3");
+  });
+
   it("cancel() calls DELETE /opencomputers/hosts/:id/agent/sessions/:id", async () => {
     mockDelete.mockResolvedValue(undefined);
     const oc = new OpenComputers(makeHttp());

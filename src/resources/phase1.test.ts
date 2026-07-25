@@ -42,21 +42,21 @@ beforeEach(() => {
 describe("tenant.preview_domain", () => {
   it("get calls GET /tenant/preview-domain", async () => {
     mockGet.mockResolvedValue({
-      domain: "preview.acme.com",
+      preview_domain: "preview.acme.com",
       verified_at: null,
     });
     const tenant = new Tenant(makeHttp());
     const result = await tenant.preview_domain.get();
     expect(mockGet).toHaveBeenCalledWith("/tenant/preview-domain");
-    expect(result.domain).toBe("preview.acme.com");
+    expect(result.preview_domain).toBe("preview.acme.com");
   });
 
   it("set calls PUT /tenant/preview-domain", async () => {
-    mockPut.mockResolvedValue({ domain: "preview.acme.com" });
+    mockPut.mockResolvedValue({ preview_domain: "preview.acme.com" });
     const tenant = new Tenant(makeHttp());
     await tenant.preview_domain.set("preview.acme.com");
     expect(mockPut).toHaveBeenCalledWith("/tenant/preview-domain", {
-      domain: "preview.acme.com",
+      preview_domain: "preview.acme.com",
     });
   });
 
@@ -95,7 +95,7 @@ describe("tenant.branding", () => {
     mockPut.mockResolvedValue(branding);
     const tenant = new Tenant(makeHttp());
     await tenant.branding.set(branding);
-    expect(mockPut).toHaveBeenCalledWith("/tenant/branding", branding);
+    expect(mockPut).toHaveBeenCalledWith("/tenant/branding", { branding });
   });
 });
 

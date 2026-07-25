@@ -1,5 +1,6 @@
 import { MiosaError, NetworkError, TimeoutError } from "./errors.js";
 import type { MiosaErrorBody } from "./errors.js";
+import { SDK_USER_AGENT } from "./version.js";
 
 // ─── Transport tuning ─────────────────────────────────────────────────────────
 //
@@ -89,6 +90,7 @@ export interface RequestOptions {
 export interface HttpClientConfig {
   baseUrl: string;
   apiKey: string;
+  tenant?: string;
   timeout: number;
   maxRetries: number;
 }
@@ -115,12 +117,14 @@ export class HttpClient {
   readonly baseUrl: string;
   /** Public for WebSocket clients that need to send the same auth. */
   readonly apiKey: string;
+  readonly tenant: string | undefined;
   private readonly timeout: number;
   private readonly maxRetries: number;
 
   constructor(config: HttpClientConfig) {
     this.baseUrl = config.baseUrl.replace(/\/$/, "");
     this.apiKey = config.apiKey;
+    this.tenant = config.tenant;
     this.timeout = config.timeout ?? DEFAULT_TIMEOUT;
     this.maxRetries = config.maxRetries ?? DEFAULT_MAX_RETRIES;
   }
@@ -141,12 +145,14 @@ export class HttpClient {
   }
 
   private baseHeaders(extra?: Record<string, string>): Record<string, string> {
-    return {
+    const headers: Record<string, string> = {
       Authorization: `Bearer ${this.apiKey}`,
       Accept: "application/json",
-      "User-Agent": "@miosa/sdk/1.0.0",
+      "User-Agent": SDK_USER_AGENT,
       ...extra,
     };
+    if (this.tenant) headers["X-MIOSA-Tenant"] = this.tenant;
+    return headers;
   }
 
   async request<T>(path: string, options: RequestOptions = {}): Promise<T> {

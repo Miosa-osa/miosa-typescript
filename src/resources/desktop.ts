@@ -45,6 +45,21 @@ export class Desktop {
     });
   }
 
+  /** Explicit left-button click. Alias for click(x, y, "left"). */
+  async leftClick(x: number, y: number): Promise<DesktopActionResult> {
+    return this.click(x, y, "left");
+  }
+
+  /** Right-button click. Alias for click(x, y, "right"). */
+  async rightClick(x: number, y: number): Promise<DesktopActionResult> {
+    return this.click(x, y, "right");
+  }
+
+  /** Middle-button click. Alias for click(x, y, "middle"). */
+  async middleClick(x: number, y: number): Promise<DesktopActionResult> {
+    return this.click(x, y, "middle");
+  }
+
   /** Double-click at the given coordinates. */
   async doubleClick(x: number, y: number): Promise<DesktopActionResult> {
     const params: DoubleClickParams = { x, y };
@@ -54,16 +69,31 @@ export class Desktop {
     );
   }
 
+  /** Move the mouse pointer without clicking. */
+  async moveMouse(x: number, y: number): Promise<DesktopActionResult> {
+    return this.http.post<DesktopActionResult>(`${this.base()}/move`, { x, y });
+  }
+
   /** Type text into the currently focused element. */
   async type(text: string, delay?: number): Promise<DesktopActionResult> {
     const params: TypeParams = { text, ...(delay !== undefined && { delay }) };
     return this.http.post<DesktopActionResult>(`${this.base()}/type`, params);
   }
 
+  /** Alias for `type(text)` used by simple computer-control loops. */
+  async write(text: string, delay?: number): Promise<DesktopActionResult> {
+    return this.type(text, delay);
+  }
+
   /** Send a key or key combination (e.g. "Enter", "ctrl+c"). */
   async key(key: string): Promise<DesktopActionResult> {
     const params: KeyParams = { key };
     return this.http.post<DesktopActionResult>(`${this.base()}/key`, params);
+  }
+
+  /** Alias for `key(key)` used by simple computer-control loops. */
+  async press(key: string): Promise<DesktopActionResult> {
+    return this.key(key);
   }
 
   /** Scroll in a direction at an optional position. */

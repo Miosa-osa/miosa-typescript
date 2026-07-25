@@ -1,5 +1,59 @@
 // Main client
 export { Miosa } from "./client.js";
+export { Organizations, OrganizationMembers } from "./resources/organizations.js";
+export type {
+  OrganizationRole,
+  OrganizationSummary,
+  OrganizationMember,
+  OrganizationMemberList,
+  OrganizationMemberRemoved,
+  OrganizationSwitchResult,
+} from "./resources/organizations.js";
+export {
+  AGENT_BUILD_KIND_SPECS,
+  DEFAULT_AGENT_BUILD_OUTPUT_ROOT,
+  DEFAULT_AGENT_BUILD_PACKET_VERSION,
+  createAgentBuildExecutionPacket,
+  createAgentBuildExpectedOutputs,
+  createAgentBuildPrompt,
+  createBuildRunParams,
+  getAgentBuildKindSpec,
+  resolveAgentBuildKind,
+} from "./agent-builds.js";
+export type {
+  AgentBuildFileSpec,
+  AgentBuildExecutionPacket,
+  AgentBuildKind,
+  AgentBuildKindSpec,
+  AgentBuildPlannerDocument,
+  CreateAgentBuildPacketParams,
+  CreateBuildRunParams,
+} from "./agent-builds.js";
+
+// AppAuth — end-user auth client for apps running inside MIOSA sandboxes/deployments
+export { AppAuth } from "./resources/app-auth.js";
+export type {
+  AppAuthConfig,
+  AppAuthSession,
+  AppAuthTokenPayload,
+  AppAuthResourceType,
+  AuthToken,
+  UserId,
+} from "./resources/app-auth.js";
+export { AppDocuments } from "./resources/app-documents.js";
+export type {
+  AppActionDecision,
+  AppAutomationRun,
+  AppDocument,
+  AppCollectionRecord,
+  AppDocumentDiagnostics,
+  AppDocumentCreateParams,
+  AppDocumentRecord,
+  AppDocumentUpdateParams,
+  AppReleaseCandidate,
+  AppJson,
+  AppReleaseApproval,
+} from "./resources/app-documents.js";
 
 // OpenComputers namespace
 export { OpenComputers } from "./resources/open-computers/index.js";
@@ -71,7 +125,112 @@ export { Desktop } from "./resources/desktop.js";
 export { Exec } from "./resources/exec.js";
 export { Files } from "./resources/files.js";
 export { Credits } from "./resources/credits.js";
+export { Cloud } from "./resources/cloud.js";
+export type {
+  AttachAwsRoleParams,
+  CloudAccount,
+  CloudAccountCreateParams,
+  CloudAccountMode,
+  CloudAccountStatus,
+  CloudCredentialType,
+  CloudListParams,
+  CloudPlacementScope,
+  CloudPool,
+  CloudPoolCreateParams,
+  CloudPoolKind,
+  CloudPreflightRecordParams,
+  CloudPreflightRun,
+  CloudPreflightStatus,
+  CloudProvider,
+  CloudRegion,
+  CloudRegionCreateParams,
+} from "./resources/cloud.js";
 export { Admin } from "./resources/admin.js";
+export { RunGroups } from "./resources/run-groups.js";
+export { Runs } from "./resources/runs.js";
+export { AgentRuntimeProfiles } from "./resources/agent-runtime-profiles.js";
+export {
+  ComputerConnectors,
+  Connectors,
+  DeploymentConnectors,
+  SandboxConnectors,
+} from "./resources/connectors.js";
+export type {
+  ConnectorApplicableDefaultParams,
+  ConnectorCreateParams,
+  ConnectorData,
+  ConnectorDefault,
+  ConnectorDefaultListParams,
+  ConnectorDefaultParams,
+  ConnectorListParams,
+  ConnectorSubject,
+  ConnectorTokenParams,
+  ConnectorTokenResponse,
+  SandboxConnectorAttachParams,
+  SandboxConnectorBinding,
+  SandboxConnectorPreflightParams,
+  SandboxConnectorPreflightResult,
+} from "./resources/connectors.js";
+export { RuntimeEnv } from "./resources/runtime-env.js";
+export { RuntimeCapabilitiesResource } from "./resources/runtime-capabilities.js";
+export { Devices } from "./resources/devices.js";
+export type {
+  RuntimeEnvListParams,
+  RuntimeEnvScope,
+  RuntimeEnvSetParams,
+  RuntimeEnvTarget,
+  RuntimeEnvVar,
+} from "./resources/runtime-env.js";
+export type { RuntimeCapabilities } from "./resources/runtime-capabilities.js";
+export type {
+  DeviceCapabilities,
+  DeviceData,
+  DeviceExecParams,
+  DeviceExecResult,
+  DeviceExposeParams,
+  DeviceExposeResult,
+  DeviceFileEntry,
+  DeviceFileListParams,
+  DeviceKind,
+  DeviceListParams,
+  DeviceExtendParams,
+  DeviceLifecycleResult,
+  DeviceBootstrapParams,
+  DeviceBootstrapResult,
+  DeviceBrowserResult,
+  DeviceReadFileParams,
+  DeviceReadFileResult,
+  DeviceWriteFileParams,
+  DeviceWriteFileResult,
+} from "./resources/devices.js";
+export type {
+  RunGroup,
+  RunGroupCounts,
+  RunGroupCreateParams,
+  RunGroupDispatchEntry,
+  RunGroupDispatchResult,
+  RunGroupActivity,
+  RunGroupFile,
+  RunGroupListParams,
+  RunGroupStatus,
+  RunGroupWaitOptions,
+} from "./resources/run-groups.js";
+export type {
+  Run,
+  RunCommandOutput,
+  RunCreateParams,
+  RunDiagnostic,
+  RunDownload,
+  RunActivity,
+  RunFile,
+  RunListParams,
+  RunMessage,
+  RunOutputs,
+  RunPreview,
+  RunStatus,
+  RunTargetKind,
+  RunWaitOptions,
+} from "./resources/runs.js";
 export type {
   ListAdminUsersParams,
   ListAdminTenantsParams,
@@ -83,7 +242,6 @@ export type {
 export {
   Sandbox,
   Sandboxes,
-  SandboxArtifacts,
   SandboxCommands,
   SandboxFiles,
   SandboxPreview,
@@ -94,6 +252,9 @@ export type {
   SandboxData,
   SandboxExecOptions,
   SandboxExecResult,
+  SandboxExecEvent,
+  SandboxExecRunner,
+  SandboxGetOrCreateParams,
   SandboxId,
   SandboxListParams,
   SandboxState,
@@ -122,6 +283,11 @@ export type {
   DeploymentData,
   DeploymentId,
   DeploymentListParams,
+  DeploymentProduct,
+  DeploymentProofCheck,
+  DeploymentProofParams,
+  DeploymentProofProbe,
+  DeploymentProofResult,
   DeploymentReleaseData,
   DeploymentReleaseId,
   DeploymentServiceData,
@@ -134,6 +300,11 @@ export type {
   DeploymentVersionId,
   DeploymentVersionKind,
   DeploymentVersionState,
+  DockerDeployCreateParams,
+  DockerDeployDoctorCheck,
+  DockerDeployDoctorParams,
+  DockerDeployDoctorProbe,
+  DockerDeployDoctorResult,
   ExternalAttribution,
   PublishFromSandboxParams,
   PublishParams,
@@ -145,6 +316,17 @@ export type {
   RuntimeLogsResult,
   VersionListParams,
 } from "./resources/deployments.js";
+export { DockerDeploy } from "./resources/docker-deploy.js";
+export type {
+  DockerDeployApplianceStatus,
+  DockerDeployHostData,
+  DockerDeployHostEnsureParams,
+  DockerDeployHostId,
+  DockerDeployHostListParams,
+  DockerDeployHostListResponse,
+  DockerDeployHostResponse,
+  DockerDeployHostStatus,
+} from "./resources/docker-deploy.js";
 export type {
   SnapshotData,
   SnapshotStatus,
@@ -181,6 +363,8 @@ export type {
   VolumeData,
   VolumeListParams,
   VolumeCreateParams,
+  VolumeAttachmentData,
+  VolumeAttachParams,
 } from "./resources/volumes.js";
 export { FlatCustomDomains } from "./resources/flat-custom-domains.js";
 export type {
@@ -216,7 +400,7 @@ export type {
   HealthCheckCreateParams,
   HealthCheckUpdateParams,
 } from "./resources/health-checks.js";
-export { Webhooks } from "./resources/webhooks.js";
+export { verifySignature, Webhooks } from "./resources/webhooks.js";
 export type {
   WebhookId,
   WebhookDeliveryId,
@@ -236,6 +420,18 @@ export type {
   TemplateCreateParams,
   TemplateBuildCreateParams,
 } from "./resources/sandbox-templates.js";
+export { Templates } from "./resources/templates.js";
+export type {
+  ComputeProduct,
+  ProductCatalogEntry,
+  ProductTemplate,
+  ProductTemplateCatalog,
+  TemplateBenchmarkLane,
+  TemplateReadinessContract,
+  TemplateReadinessState,
+  TemplateSizeReadiness,
+  TemplatesListParams,
+} from "./resources/templates.js";
 export { ApiKeys } from "./resources/api-keys.js";
 export type {
   ApiKeyId,
@@ -285,7 +481,12 @@ export type {
 
 // P2 resources
 export { Tenant } from "./resources/tenant.js";
-export type { TenantPlan } from "./resources/tenant.js";
+export type {
+  BrandingData,
+  PreviewDomainData,
+  TenantBrandingUpdateParams,
+  TenantPlan,
+} from "./resources/tenant.js";
 export { Regions } from "./resources/regions.js";
 export type {
   RegionData,
@@ -463,13 +664,22 @@ export type {
 export {
   MiosaError,
   AuthError,
+  EgressHostNotAllowedError,
+  InstallationRequiredError,
   NotFoundError,
   RateLimitError,
   InsufficientCreditsError,
+  ManagedProviderBindingOnlyError,
+  ProjectNotLinkedError,
+  ScopeNotAllowedError,
+  SubjectNotAllowedError,
   ValidationError,
   TimeoutError,
+  TokenRefreshFailedError,
+  UserAuthorizationRequiredError,
   NetworkError,
 } from "./errors.js";
+export type { MiosaErrorBody } from "./errors.js";
 
 // All TypeScript types
 export type {
@@ -527,7 +737,7 @@ export type {
   MkdirParams,
   CopyParams,
   DirListResult,
-  // Agent / CUA
+  // Computer control sessions
   AgentSessionStatus,
   AgentSessionCreateParams,
   AgentSessionData,

@@ -172,33 +172,60 @@ export interface TunnelListResponse {
 export type AgentSessionStatus =
   | "pending"
   | "running"
+  | "succeeded"
   | "completed"
   | "failed"
+  | "canceled"
   | "cancelled";
 
 export interface OcAgentSessionData {
   id: string;
+  session_id?: string;
   host_id: HostId;
   task: string;
-  model_id: string | null;
+  model_id?: string | null;
+  model?: string | null;
   status: AgentSessionStatus;
-  max_turns: number;
-  turns_used: number;
-  created_at: string;
-  updated_at: string;
-  completed_at: string | null;
-  error: string | null;
+  tools?: string[];
+  max_turns?: number;
+  turns_used?: number;
+  max_steps?: number | null;
+  max_tokens?: number | null;
+  timeout_ms?: number | null;
+  agent_runtime_profile_id?: string | null;
+  runtime_context?: Record<string, unknown>;
+  sse_url?: string;
+  optimal_session_id?: string | null;
+  created_at?: string;
+  updated_at?: string;
+  started_at?: string | null;
+  ended_at?: string | null;
+  inserted_at?: string;
+  completed_at?: string | null;
+  error?: string | null;
+  result_summary?: string | null;
 }
 
 export interface AgentDispatchParams {
   task: string;
+  model?: string;
   model_id?: string;
   max_turns?: number;
+  tools?: string[];
+  budget?: {
+    max_steps?: number;
+    max_tokens?: number;
+    timeout_ms?: number;
+  };
+  agent_runtime_profile_id?: string;
+  agent_profile_id?: string;
+  skip_agent_runtime_profile?: boolean;
   context?: Record<string, unknown>;
 }
 
 export interface AgentSessionListResponse {
-  data: OcAgentSessionData[];
+  data?: OcAgentSessionData[];
+  sessions?: OcAgentSessionData[];
 }
 
 export interface AgentEvent {
