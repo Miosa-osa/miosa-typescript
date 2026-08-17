@@ -225,8 +225,10 @@ export class HttpClient {
 
         // 204 No Content
         if (response.status === 204) {
-          return undefined as unknown as T;
+          return (options.rawResponse ? response : undefined) as unknown as T;
         }
+
+        if (options.rawResponse) return response as unknown as T;
 
         return (await response.json()) as T;
       } catch (err) {

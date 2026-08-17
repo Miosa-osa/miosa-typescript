@@ -4,6 +4,7 @@ import { AgentRunGroups } from "./resources/agent-run-groups.js";
 import { AgentRuns } from "./resources/agent-runs.js";
 import { RunGroups } from "./resources/run-groups.js";
 import { AgentRuntimeProfiles } from "./resources/agent-runtime-profiles.js";
+import { AgentDefinitions } from "./resources/agent-definitions.js";
 import { Runs } from "./resources/runs.js";
 import { Analytics } from "./resources/analytics.js";
 import { ApiKeys } from "./resources/api-keys.js";
@@ -33,6 +34,7 @@ import { Embeddings } from "./resources/embeddings.js";
 import { ExternalKeys } from "./resources/external-keys.js";
 import { FlatCustomDomains } from "./resources/flat-custom-domains.js";
 import { Functions } from "./resources/functions.js";
+import { Forge } from "./resources/forge.js";
 import { HealthChecks } from "./resources/health-checks.js";
 import { Integrations } from "./resources/integrations.js";
 import { Mcp } from "./resources/mcp.js";
@@ -94,6 +96,7 @@ export class Miosa {
   readonly orgInvites: OrgInvites;
   /** Organizations available to the user session, membership, invites, and switching. */
   readonly organizations: Organizations;
+  readonly forge: Forge;
 
   /** Current tenant plan, limits, and live usage counters. */
   readonly tenant: Tenant;
@@ -154,6 +157,9 @@ export class Miosa {
 
   /** Agent runtime profiles — tenant/workspace defaults for sandbox/computer agents. */
   readonly agentRuntimeProfiles: AgentRuntimeProfiles;
+
+  /** Persisted workspace Agent definitions and immutable versions. */
+  readonly agents: AgentDefinitions;
 
   /** MIOSA Connect — provider connectors and runtime tokens. */
   readonly connectors: Connectors;
@@ -302,6 +308,7 @@ export class Miosa {
     this.workspaceInvites = new WorkspaceInvites(this.http);
     this.orgInvites = new OrgInvites(this.http);
     this.organizations = new Organizations(this.http);
+    this.forge = new Forge(this.http);
     this.tenant = new Tenant(this.http);
     this.regions = new Regions(this.http);
     this.settings = new Settings(this.http);
@@ -322,6 +329,7 @@ export class Miosa {
     this.agentRuns = new AgentRuns(this.http);
     this.agentRunGroups = new AgentRunGroups(this.http);
     this.agentRuntimeProfiles = new AgentRuntimeProfiles(this.http);
+    this.agents = new AgentDefinitions(this.http);
     this.connectors = new Connectors(this.http);
     this.runtimeEnv = new RuntimeEnv(this.http);
     this.runtimeCapabilities = new RuntimeCapabilitiesResource(this.http);

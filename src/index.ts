@@ -146,9 +146,36 @@ export type {
   CloudRegionCreateParams,
 } from "./resources/cloud.js";
 export { Admin } from "./resources/admin.js";
+export {
+  Forge,
+  ForgeContractError,
+  ForgePolicyViolationError,
+  ForgeRepositories,
+  ForgeStorageError,
+  ForgeUnavailableError,
+} from "./resources/forge.js";
+export type {
+  ForgeOrganizationId,
+  ForgeRepository,
+  ForgeRepositoryCreateParams,
+  ForgeRepositoryDeleteOptions,
+  ForgeDeleteReceipt,
+  ForgeRepositoryId,
+  ForgeRepositoryUpdateParams,
+  ForgeRepositoryState,
+  ForgeRepositoryVisibility,
+} from "./resources/forge.js";
 export { RunGroups } from "./resources/run-groups.js";
 export { Runs } from "./resources/runs.js";
 export { AgentRuntimeProfiles } from "./resources/agent-runtime-profiles.js";
+export { AgentDefinitions } from "./resources/agent-definitions.js";
+export type {
+  AgentDefinitionCreateParams,
+  AgentDefinitionData,
+  AgentDefinitionListParams,
+  AgentDefinitionUpdateParams,
+  AgentVersionData,
+} from "./resources/agent-definitions.js";
 export {
   ComputerConnectors,
   Connectors,
