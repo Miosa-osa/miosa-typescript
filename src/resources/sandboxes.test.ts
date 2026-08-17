@@ -897,6 +897,92 @@ describe("Sandbox handle", () => {
     expect(deployment.deployment_product).toBe("docker_deploy");
   });
 
+  it("deploySnapshot publishes an isolated approved snapshot and cleans it up", async () => {
+    mockRequest
+      .mockResolvedValueOnce({ data: sandboxData({ id: "sbx_release_1" }) })
+      .mockResolvedValueOnce({ data: { deployment_id: "dep_release_1" } });
+    mockDelete.mockResolvedValueOnce({
+      data: sandboxData({ id: "sbx_release_1", state: "destroyed" }),
+    });
+    const sandbox = new Sandbox(makeHttp(), sandboxData());
+
+    const deployment = await sandbox.deploySnapshot("snap_approved_1", {
+      name: "approved-site",
+    });
+
+    expect(mockRequest).toHaveBeenNthCalledWith(1, "/sandboxes/sbx_123/fork", {
+      method: "POST",
+      body: {
+        snapshot_id: "snap_approved_1",
+        name: "release-snap_approve",
+        metadata: {
+          release_source_sandbox_id: "sbx_123",
+          snapshot_id: "snap_approved_1",
+        },
+      },
+    });
+    expect(mockRequest).toHaveBeenNthCalledWith(
+      2,
+      "/sandboxes/sbx_release_1/deploy",
+      { method: "POST", body: { name: "approved-site" } },
+    );
+    expect(mockDelete).toHaveBeenCalledWith("/sandboxes/sbx_release_1");
+    expect(deployment.source_snapshot_id).toBe("snap_approved_1");
+  });
+
+  it("deploySnapshot reports cleanup failures without masking the deployment", async () => {
+    mockRequest
+      .mockResolvedValueOnce({ data: sandboxData({ id: "sbx_release_1" }) })
+      .mockResolvedValueOnce({ data: { deployment_id: "dep_release_1" } });
+    mockDelete.mockRejectedValueOnce(new Error("cleanup unavailable"));
+    const sandbox = new Sandbox(makeHttp(), sandboxData());
+
+    const deployment = await sandbox.deploySnapshot("snap_approved_1", {
+      name: "approved-site",
+    });
+
+    expect(deployment.deployment_id).toBe("dep_release_1");
+    expect(deployment.release_sandbox_id).toBe("sbx_release_1");
+    expect(deployment.release_cleanup_error).toBe("cleanup unavailable");
+  });
+
+  it("deploySnapshot keeps provenance when the deploy returns no content", async () => {
+    mockRequest
+      .mockResolvedValueOnce({ data: sandboxData({ id: "sbx_release_1" }) })
+      .mockResolvedValueOnce(undefined);
+    mockDelete.mockResolvedValueOnce({
+      data: sandboxData({ id: "sbx_release_1", state: "destroyed" }),
+    });
+    const sandbox = new Sandbox(makeHttp(), sandboxData());
+
+    const deployment = await sandbox.deploySnapshot("snap_approved_1");
+
+    expect(deployment).toEqual({
+      source_snapshot_id: "snap_approved_1",
+      release_sandbox_id: "sbx_release_1",
+    });
+    expect(mockDelete).toHaveBeenCalledWith("/sandboxes/sbx_release_1");
+  });
+
+  it("deploySnapshot surfaces the orphaned release sandbox when deploy and cleanup both fail", async () => {
+    mockRequest
+      .mockResolvedValueOnce({ data: sandboxData({ id: "sbx_release_1" }) })
+      .mockRejectedValueOnce(
+        new MiosaError("deploy rejected", 500, "DEPLOY_FAILED"),
+      );
+    mockDelete.mockRejectedValueOnce(new Error("cleanup unavailable"));
+    const sandbox = new Sandbox(makeHttp(), sandboxData());
+
+    const error = await sandbox
+      .deploySnapshot("snap_approved_1")
+      .catch((thrown: unknown) => thrown as Record<string, unknown>);
+
+    expect(error).toBeInstanceOf(MiosaError);
+    expect((error as Error).message).toBe("deploy rejected");
+    expect(error.release_sandbox_id).toBe("sbx_release_1");
+    expect(error.release_cleanup_error).toBe("cleanup unavailable");
+  });
+
   it("throws before operations when not running", async () => {
     const sandbox = new Sandbox(
       makeHttp(),

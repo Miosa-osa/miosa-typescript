@@ -281,6 +281,8 @@ export interface SandboxUsage {
 }
 
 export interface SandboxForkParams {
+  snapshotId?: string;
+  snapshot_id?: string;
   timeoutSec?: number;
   timeout_sec?: number;
   templateId?: string;
@@ -1433,6 +1435,7 @@ export class Sandbox {
     }
     this.assertRunning("fork");
     const body = stripUndefined({
+      snapshot_id: opts.snapshotId ?? opts.snapshot_id,
       timeout_sec: opts.timeoutSec ?? opts.timeout_sec,
       template_id: opts.templateId ?? opts.template_id,
     });
@@ -1456,6 +1459,7 @@ export class Sandbox {
   async forkLegacy(opts: SandboxLegacyForkParams = {}): Promise<Sandbox> {
     this.assertRunning("fork");
     const body = stripUndefined({
+      snapshot_id: opts.snapshotId ?? opts.snapshot_id,
       timeout_sec: opts.timeoutSec ?? opts.timeout_sec,
       template_id: opts.templateId ?? opts.template_id,
       name: opts.name,
@@ -1668,6 +1672,62 @@ export class Sandbox {
     params: SandboxDeployParams = {},
   ): Promise<Record<string, unknown>> {
     return this.deploy({ ...params, deploymentType: "docker_deploy" });
+  }
+
+  /** Deploy an immutable snapshot without modifying the editable sandbox. */
+  async deploySnapshot(
+    snapshotId: string,
+    params: SandboxDeployParams = {},
+    options: { cleanup?: boolean; forkIdempotencyKey?: string } = {},
+  ): Promise<Record<string, unknown>> {
+    const release = await this.forkLegacy({
+      snapshotId,
+      name: `release-${snapshotId.slice(0, 12)}`,
+      metadata: { release_source_sandbox_id: this.id, snapshot_id: snapshotId },
+      ...(options.forkIdempotencyKey
+        ? { idempotencyKey: options.forkIdempotencyKey }
+        : {}),
+    });
+    const cleanupRequested = options.cleanup !== false;
+    const destroyRelease = async (): Promise<string | undefined> => {
+      if (!cleanupRequested) return undefined;
+      try {
+        await release.destroy();
+        return undefined;
+      } catch (error) {
+        return error instanceof Error ? error.message : String(error);
+      }
+    };
+
+    let result: Record<string, unknown>;
+    try {
+      result = (await release.deploy(params)) ?? {};
+    } catch (error) {
+      const failedCleanup = await destroyRelease();
+      if (cleanupRequested && failedCleanup === undefined) throw error;
+      const leak: Record<string, unknown> = {
+        release_sandbox_id: release.id,
+      };
+      if (failedCleanup !== undefined) {
+        leak.release_cleanup_error = failedCleanup;
+      }
+      if (typeof error === "object" && error !== null) {
+        throw Object.assign(error, leak);
+      }
+      throw Object.assign(
+        new Error(`Snapshot deployment failed: ${String(error)}`, {
+          cause: error,
+        }),
+        leak,
+      );
+    }
+    const cleanupErrorMessage = await destroyRelease();
+    result.source_snapshot_id = snapshotId;
+    result.release_sandbox_id = release.id;
+    if (cleanupErrorMessage !== undefined) {
+      result.release_cleanup_error = cleanupErrorMessage;
+    }
+    return result;
   }
 
   /** Check readiness of the sandbox (GET /sandboxes/:id/readiness). */

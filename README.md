@@ -291,6 +291,30 @@ const deployment = await sbx.deploy({
 });
 ```
 
+To publish the exact snapshot that passed QA instead of whatever the editable
+sandbox holds right now, use `deploySnapshot`. It forks the snapshot into a
+temporary release sandbox, deploys that fork, and destroys it again, so the
+source sandbox is never mutated:
+
+```ts
+const snap = await sbx.snapshots.create("qa-approved");
+
+const release = await sbx.deploySnapshot(snap.id, {
+  name: "clinic-intake",
+  outputPath: "/workspace/dist",
+  entrypoint: "index.html",
+});
+
+console.log(release.source_snapshot_id, release.release_sandbox_id);
+```
+
+The result always carries `source_snapshot_id` and `release_sandbox_id` for
+provenance. Pass `{ cleanup: false }` as the third argument to keep the release
+sandbox for inspection. If the release sandbox could not be destroyed, the
+deployment still succeeds and `release.release_cleanup_error` explains why; when
+the deploy itself fails and the release sandbox survives, the thrown error
+carries the same fields so the leftover sandbox can be cleaned up by id.
+
 For workspace App Engine, publish from the same sandbox but choose the
 App Engine target:
 

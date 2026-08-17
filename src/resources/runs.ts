@@ -5,6 +5,9 @@ export type RunStatus = "running" | "succeeded" | "failed" | "canceled";
 
 export interface Run {
   id: string;
+  agent_definition_id?: string | null;
+  agent_version_id?: string | null;
+  configuration_receipt?: Record<string, unknown> | null;
   run_group_id?: string;
   parent_run_id?: string;
   orchestration_role?: string;
@@ -178,6 +181,9 @@ export interface RunCreateParams {
   env?: Record<string, string>;
   agentRuntimeProfileId?: string;
   agentProfileId?: string;
+  agentDefinitionId?: string;
+  agentVersionId?: string;
+  configurationReceipt?: Record<string, unknown>;
   runGroupId?: string;
   parentRunId?: string;
   orchestrationRole?: string;
@@ -387,6 +393,9 @@ export class Runs {
       env: params.env,
       agent_runtime_profile_id: params.agentRuntimeProfileId,
       agent_profile_id: params.agentProfileId,
+      agent_definition_id: params.agentDefinitionId,
+      agent_version_id: params.agentVersionId,
+      configuration_receipt: params.configurationReceipt,
       run_group_id: params.runGroupId,
       parent_run_id: params.parentRunId,
       orchestration_role: params.orchestrationRole,
