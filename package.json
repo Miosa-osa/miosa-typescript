@@ -1,6 +1,6 @@
 {
   "name": "@miosa/sdk",
-  "version": "2.0.6",
+  "version": "2.0.7",
   "description": "TypeScript SDK for the MIOSA API - cloud VM desktop infrastructure for AI agents",
   "license": "MIT",
   "author": "MIOSA <hello@miosa.ai>",
