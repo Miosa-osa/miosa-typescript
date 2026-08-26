@@ -1763,10 +1763,7 @@ export class Sandbox {
 
     if (stream) {
       const sseResult = await this.tryReadinessStream(timeout);
-      if (sseResult !== null) {
-        if (sseResult) await this.adoptReadyState();
-        return sseResult;
-      }
+      if (sseResult !== null) return sseResult;
       // null === fall through to polling fallback (404 or transport error)
     }
 
@@ -1775,33 +1772,13 @@ export class Sandbox {
     while (Date.now() < deadlineMs) {
       try {
         const data = await this.readiness();
-        if (data.ready === true || data.status === "ready") {
-          await this.adoptReadyState();
-          return true;
-        }
+        if (data.ready === true || data.status === "ready") return true;
       } catch {
         // swallow transient errors and keep polling
       }
       await new Promise((resolve) => setTimeout(resolve, 10));
     }
     return false;
-  }
-
-  /**
-   * Readiness answers from the server; `assertRunning` reads the local
-   * snapshot. Leaving that snapshot behind meant a caller could await
-   * `waitUntilReady()`, receive `true`, and have the very next call refused
-   * for being "provisioning" — the sandbox was running the whole time, only
-   * this object had not been told. Nothing here can fail the wait: readiness
-   * has already answered, so a refresh that does not land is not the caller's
-   * problem.
-   */
-  private async adoptReadyState(): Promise<void> {
-    try {
-      await this.refresh();
-    } catch {
-      // keep the readiness verdict
-    }
   }
 
   /**

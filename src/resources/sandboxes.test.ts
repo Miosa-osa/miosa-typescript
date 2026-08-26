@@ -1167,10 +1167,7 @@ describe("Sandbox.waitUntilReady", () => {
         }),
       }),
     );
-    // A satisfied stream means no readiness polling. Syncing the local state
-    // once afterwards is a different call and is what lets the next operation
-    // through, so assert on the endpoint rather than on silence.
-    expect(mockGet).not.toHaveBeenCalledWith("/sandboxes/sbx_123/readiness");
+    expect(mockGet).not.toHaveBeenCalled();
   });
 
   it("returns false when SSE emits event: timeout", async () => {
@@ -1205,52 +1202,6 @@ describe("Sandbox.waitUntilReady", () => {
     expect(result).toBe(true);
     expect(mockGet).toHaveBeenCalledWith("/sandboxes/sbx_123/readiness");
     expect(mockGet.mock.calls.length).toBeGreaterThanOrEqual(2);
-  });
-
-  // The whole point of awaiting readiness is being allowed to use the sandbox
-  // afterwards. Reporting ready while the local snapshot still said
-  // "provisioning" meant the next call was refused client-side by
-  // assertRunning, so the documented create -> wait -> run sequence could not
-  // work against a real server.
-  it("adopts the running state so the next call is allowed", async () => {
-    globalThis.fetch = vi.fn().mockResolvedValue(
-      new Response('{"error":"not implemented"}', {
-        status: 404,
-        headers: { "content-type": "application/json" },
-      }),
-    ) as unknown as typeof fetch;
-
-    mockGet
-      .mockResolvedValueOnce({ data: { ready: true } })
-      .mockResolvedValueOnce({ data: sandboxData({ state: "running" }) });
-
-    const sandbox = new Sandbox(
-      makeHttpForStream(),
-      sandboxData({ state: "provisioning" }),
-    );
-
-    expect(await sandbox.waitUntilReady({ timeout: 2 })).toBe(true);
-    expect(sandbox.state).toBe("running");
-  });
-
-  it("still reports ready when the state refresh fails", async () => {
-    globalThis.fetch = vi.fn().mockResolvedValue(
-      new Response('{"error":"not implemented"}', {
-        status: 404,
-        headers: { "content-type": "application/json" },
-      }),
-    ) as unknown as typeof fetch;
-
-    mockGet
-      .mockResolvedValueOnce({ data: { ready: true } })
-      .mockRejectedValueOnce(new Error("network"));
-
-    const sandbox = new Sandbox(
-      makeHttpForStream(),
-      sandboxData({ state: "provisioning" }),
-    );
-
-    expect(await sandbox.waitUntilReady({ timeout: 2 })).toBe(true);
   });
 
   it("stream:false skips SSE and only polls", async () => {
